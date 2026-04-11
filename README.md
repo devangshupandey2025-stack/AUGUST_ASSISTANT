@@ -11,13 +11,15 @@ A modular, voice-first desktop assistant for **Windows** that listens for a wake
   1. System intent resolver (time/date/greetings/schedule)
   2. Rule-based intent parser
   3. Gemini fallback parser (structured action JSON)
+  4. Decision engine that validates/corrects plans, resolves context-aware commands (like "open it"/"close it"), and routes informational questions to answer mode.
 - Action execution for:
   - Open/close apps
   - Web/search actions (Google/YouTube/Gmail/GitHub/Reddit)
   - Volume controls (up/down/mute/unmute)
   - Calendar summary for today
-  - Reminder creation (`in X minutes/hours/seconds`)
-  - System restart/shutdown (with confirmation)
+- Reminder creation (`in X minutes/hours/seconds`)
+- System restart/shutdown (with confirmation)
+- Informational Q&A responses for prompts like "what is..." and "difference between..."
 - Text-to-speech responses (`pyttsx3`).
 - Persistent memory (`memory.json`) for learned command patterns and app usage habits.
 - Background scheduler for reminder triggers and proactive app suggestions.
@@ -38,6 +40,8 @@ preprocessor.py        # Text cleanup and normalization
 system_intents.py      # Fast-path system intent rules
 intent_parser.py       # Rule-based intent parser + plan objects
 ai_parser.py           # Gemini-powered parser fallback
+decision_engine.py     # Plan correction/validation + answer-vs-action routing
+context_engine.py      # Session context state (recent commands, last app/action, time slot)
 executor.py            # Executes parsed actions
 scheduler.py           # Reminder polling + proactive suggestions
 memory.py              # Persistent memory and pattern learning
@@ -99,7 +103,7 @@ Calendar integration reads credentials from `credentials.google_calendar_api` in
 python main.py
 ```
 
-You should see: `Assistant V3 is online. Press Ctrl+C to exit.`
+You should see: `Assistant V4 is online. Press Ctrl+C to exit.`
 
 ## Example voice commands
 
@@ -118,6 +122,14 @@ You should see: `Assistant V3 is online. Press Ctrl+C to exit.`
 - Logs are written to `logs/jarvis.log` (rotating file handler).
 - Interaction history and learned patterns are stored in `memory.json`.
 - Reminders are stored in `reminders.json`.
+
+## Tests
+
+Run the decision/context engine tests:
+
+```bash
+python -m unittest tests.test_decision_engine
+```
 
 ## Notes
 
