@@ -1,0 +1,15 @@
+SpeechRecognition==3.10.1
+pyttsx3==2.90
+PyAudio==0.2.14
+requests==2.33.1
+wmi==1.5.1
+screen-brightness-control==0.24.1
+pycaw==20230407
+google-api-python-client==2.115.0
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.0
+comtypes==1.4.1
+python-dateutil==2.9.0.post0
+fuzzywuzzy==0.18.0
+python-Levenshtein==0.25.0
+AppOpener==1.7
