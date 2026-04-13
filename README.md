@@ -12,6 +12,29 @@ A modular, voice-first desktop assistant for **Windows** that listens for a wake
   2. Rule-based intent parser
   3. Gemini fallback parser (structured action JSON)
   4. Decision engine that validates/corrects plans, resolves context-aware commands (like "open it"/"close it"), and routes informational questions to answer mode.
+- Version 4.3 conversation management:
+  - Unified context model (`last_query`, `last_answer`, `last_action`, `last_app`, `pending_interaction`, `conversation_history`, `timestamp`)
+  - Pending interaction lock for multi-turn clarification/answer-vs-search flows
+  - Follow-up continuity for prompts like "give example", "explain more", and short replies
+  - Pending interaction timeout handling (20 seconds) and smart reset behavior
+- Version 4.3.1 interaction fixes:
+  - Interaction-first resolution at the start of decision handling
+  - Runtime follow-up handling for `search it` / `search` using `last_query`
+  - Pending interaction resolution for `yes`, `no`, `answer`, `search`, `tell me`, and `explain`
+  - Repetition cleanup for inputs like `what what is polymorphism`
+  - Guardrails to avoid corrupting `last_query` with short control replies
+- Version 4.4 personality layer:
+  - Calm, concise, slightly witty speaking style via `personality_engine.py`
+  - Response variation for acknowledgements and search confirmations
+  - Micro-responses for common action confirmations
+  - Humanized answer phrasing and optional light follow-up hooks
+  - TTS chunking with short pauses for more natural delivery
+- Version 4.4.1 personality refinements:
+  - Casual handling for `how are you`, `how r u`, and `what's up` with friendly direct replies
+  - Response-type mapping (`factual`, `conceptual`, `action`, `casual`, `schedule`, `failure`) for tone consistency
+  - Hooks restricted to conceptual explanations only
+  - Startup greeting rotation and schedule phrasing cleanup for natural delivery
+  - Reduced template overuse to avoid repetitive phrasing
 - Action execution for:
   - Open/close apps
   - Web/search actions (Google/YouTube/Gmail/GitHub/Reddit)
@@ -20,6 +43,12 @@ A modular, voice-first desktop assistant for **Windows** that listens for a wake
 - Reminder creation (`in X minutes/hours/seconds`)
 - System restart/shutdown (with confirmation)
 - Informational Q&A responses for prompts like "what is..." and "difference between..."
+  - Uses a robust local knowledge engine and answer pipeline for reliability:
+    1. Answer memory retrieval
+    2. Local fallback knowledge/templates (classification + confidence-gated)
+    3. Gemini AI answer attempt
+    4. Search prompt: "I'm not getting a clean answer. Want me to search it?"
+  - Uses smart answer memory (`answer_memory.py`) with normalized similarity matching, confidence gating, and expiry.
 - Text-to-speech responses (`pyttsx3`).
 - Persistent memory (`memory.json`) for learned command patterns and app usage habits.
 - Background scheduler for reminder triggers and proactive app suggestions.
@@ -40,6 +69,9 @@ preprocessor.py        # Text cleanup and normalization
 system_intents.py      # Fast-path system intent rules
 intent_parser.py       # Rule-based intent parser + plan objects
 ai_parser.py           # Gemini-powered parser fallback
+answer_fallback.py     # Local knowledge engine with query classification and templates
+answer_memory.py       # Safe answer memory store/retrieval with similarity scoring
+personality_engine.py  # Personality profile, response variation, and humanized phrasing
 decision_engine.py     # Plan correction/validation + answer-vs-action routing
 context_engine.py      # Session context state (recent commands, last app/action, time slot)
 executor.py            # Executes parsed actions
@@ -120,6 +152,8 @@ You should see: `Assistant V4 is online. Press Ctrl+C to exit.`
 ## Logs and persistence
 
 - Logs are written to `logs/jarvis.log` (rotating file handler).
+  - Answer pipeline events include: `ai_success`, `ai_failure`, `local_success`, `local_match`, `local_generated`, `local_failure`, `fallback_triggered`.
+  - Answer memory events include: `memory_hit`, `memory_miss`, `memory_store`.
 - Interaction history and learned patterns are stored in `memory.json`.
 - Reminders are stored in `reminders.json`.
 

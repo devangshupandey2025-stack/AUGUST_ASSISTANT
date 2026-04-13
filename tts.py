@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import pyttsx3
 
 from config import config
+from personality_engine import personality_engine
 from utils.logger import get_logger
 
 logger = get_logger("TTS")
@@ -29,10 +31,18 @@ class TTS:
     def speak(self, text: str) -> None:
         if not text:
             return
-        logger.info("Speaking response: %s", text)
+        rendered = personality_engine.render_for_tts(text)
+        rendered = personality_engine.add_optional_hook(rendered)
+        chunks = personality_engine.split_for_speech(rendered)
+        if not chunks:
+            return
+        logger.info("Speaking response: %s", rendered)
         with self._lock:
-            self.engine.say(text)
-            self.engine.runAndWait()
+            for idx, chunk in enumerate(chunks):
+                self.engine.say(chunk)
+                self.engine.runAndWait()
+                if idx < len(chunks) - 1:
+                    time.sleep(0.12)
 
 
 tts_engine = TTS()
