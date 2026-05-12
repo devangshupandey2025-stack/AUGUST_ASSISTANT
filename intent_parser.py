@@ -21,6 +21,7 @@ SUPPORTED_ACTIONS = {
     "current_time",
     "current_date",
     "greeting",
+    "generate_document",
 }
 
 
@@ -108,14 +109,23 @@ class IntentParser:
 
     def _strip_politeness(self, text: str) -> str:
         cleaned = text
+        wake_phrase = re.escape((config.wake_phrase or "").strip().lower())
+        wake_patterns = []
+        if wake_phrase:
+            wake_patterns.extend(
+                (
+                    rf"^(hey\s+{wake_phrase})\s+",
+                    rf"^(ok\s+{wake_phrase})\s+",
+                    rf"^({wake_phrase})\s+",
+                )
+            )
         for pattern in (
             r"^(please)\s+",
             r"^(can you)\s+",
             r"^(could you)\s+",
             r"^(would you)\s+",
             r"^(tell me)\s+",
-            r"^(jarvis)\s+",
-            r"^(hey jarvis)\s+",
+            *wake_patterns,
             r"^(assistant)\s+",
         ):
             cleaned = re.sub(pattern, "", cleaned).strip()

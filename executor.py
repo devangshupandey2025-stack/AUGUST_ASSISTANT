@@ -6,6 +6,7 @@ import time
 import webbrowser
 from ctypes import POINTER, cast
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable
 from urllib.parse import quote_plus
 
@@ -13,6 +14,7 @@ from AppOpener import open as open_app_fallback
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 
+from document_generator import generate_document
 from intent_parser import CommandPlan, ParsedCommand
 from modules.calendar_module import fetch_todays_events
 from system_intents import formatted_date, formatted_time
@@ -29,8 +31,19 @@ class ExecutionResult:
 
 
 class Executor:
-    def __init__(self, reminder_handler: Callable[[dict[str, str]], str] | None = None) -> None:
+    def __init__(
+        self,
+        reminder_handler: Callable[[dict[str, str]], str] | None = None,
+        app_registry: object | None = None,
+        ai_parser: object | None = None,
+        memory_store: object | None = None,
+        context_provider: Callable[[], dict] | None = None,
+    ) -> None:
         self.reminder_handler = reminder_handler
+        self.app_registry = app_registry
+        self.ai_parser = ai_parser
+        self.memory_store = memory_store
+        self.context_provider = context_provider
         self._handlers: dict[str, Callable[[ParsedCommand], ExecutionResult]] = {
             "open_app": self._open_app,
             "close_app": self._close_app,
@@ -43,9 +56,14 @@ class Executor:
             "current_time": self._current_time,
             "current_date": self._current_date,
             "greeting": self._greeting,
+            "generate_document": self._generate_document,
         }
 
     def execute_plan(self, plan: CommandPlan) -> ExecutionResult:
+        if not plan.commands:
+            logger.warning("Received empty command plan for execution")
+            return ExecutionResult(False, "I do not have an action to execute.")
+
         logger.info("Executing command plan with %s step(s) from source '%s'", len(plan.commands), plan.source)
         messages: list[str] = []
         executed_count = 0
@@ -101,6 +119,14 @@ class Executor:
             logger.info("Safety layer rerouted open_app '%s' to search_web", app_name)
             return self._search_web(rerouted)
 
+        selected_path = str(command.payload.get("path", "")).strip()
+        if selected_path:
+            logger.info("Opening app '%s' using registry path '%s'", app_name, selected_path)
+            launched = self._launch_path(selected_path)
+            if launched.success:
+                return launched
+            logger.warning("Registry path launch failed for '%s', continuing with legacy fallbacks", app_name)
+
         from config import config
 
         app_config = config.get_app_config(app_name)
@@ -115,7 +141,16 @@ class Executor:
             return ExecutionResult(True, f"Opening {app_name}.")
         except Exception as exc:
             logger.error("Failed to open app '%s': %s", app_name, exc)
-            return ExecutionResult(False, f"I could not open {app_name}.")
+            fallback_command = ParsedCommand(
+                action="search_web",
+                payload={"site": "google", "query": app_name},
+                source="executor_fallback",
+            )
+            fallback_result = self._search_web(fallback_command)
+            return ExecutionResult(
+                fallback_result.success,
+                f"I could not open {app_name} directly. {fallback_result.message}",
+            )
 
     def _close_app(self, command: ParsedCommand) -> ExecutionResult:
         app_name = command.payload["app"]
@@ -162,6 +197,21 @@ class Executor:
         message = self.reminder_handler(command.payload)
         success_prefixes = ("reminder set",)
         return ExecutionResult(message.lower().startswith(success_prefixes), message)
+
+    def _generate_document(self, command: ParsedCommand) -> ExecutionResult:
+        topic = str(command.payload.get("topic", "")).strip()
+        open_file = bool(command.payload.get("open_file", True))
+        context = self.context_provider() if self.context_provider is not None else {}
+        memory = self.memory_store.snapshot() if hasattr(self.memory_store, "snapshot") else {}
+        result = generate_document(
+            topic,
+            memory_store=self.memory_store,
+            ai_parser=self.ai_parser,
+            context=context,
+            memory=memory,
+            open_file=open_file,
+        )
+        return ExecutionResult(result.success, result.message)
 
     def _current_time(self, command: ParsedCommand) -> ExecutionResult:
         del command
@@ -252,3 +302,20 @@ class Executor:
         if cleaned in {"google", "youtube", "gmail", "github", "reddit"}:
             return ParsedCommand(action="search_web", payload={"site": cleaned, "query": ""}, source="safety")
         return None
+
+    def _launch_path(self, path: str) -> ExecutionResult:
+        candidate = path.strip()
+        if not candidate or not os.path.exists(candidate):
+            logger.warning("Registry path does not exist: %s", candidate)
+            return ExecutionResult(False, "Registry path not found.")
+
+        try:
+            suffix = os.path.splitext(candidate)[1].lower()
+            if suffix in {".lnk", ".appref-ms"}:
+                os.startfile(candidate)
+            else:
+                subprocess.Popen(candidate)
+            return ExecutionResult(True, f"Opening {Path(candidate).stem}.")
+        except Exception as exc:
+            logger.warning("Failed to launch registry path '%s': %s", candidate, exc)
+            return ExecutionResult(False, f"Failed to launch {candidate}.")

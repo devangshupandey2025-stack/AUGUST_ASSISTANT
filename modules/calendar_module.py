@@ -1,13 +1,13 @@
 import datetime
 import os.path
 from dateutil import parser as date_parser
+from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from config import config
 from utils.logger import get_logger
-from tts import speak
 
 logger = get_logger("Calendar")
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30), name="IST")
@@ -22,25 +22,29 @@ def get_calendar_service():
         return None
 
     creds = None
+    token_file = "token.json"
     # The file token.json stores the user's access and refresh tokens
-    if os.path.exists('token.json'):
+    if os.path.exists(token_file):
         try:
-            creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+            creds = Credentials.from_authorized_user_file(token_file, SCOPES)
         except Exception as e:
             logger.error(f"Error reading token.json: {e}")
-            os.remove('token.json')
+            _remove_stale_token(token_file)
             creds = None
             
     # If there are no (valid) credentials available, let the user log in.
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
+            try:
+                creds.refresh(Request())
+            except RefreshError as e:
+                logger.warning(f"Google Calendar token refresh failed; reauthorizing: {e}")
+                _remove_stale_token(token_file)
+                creds = _run_calendar_oauth_flow(creds_file)
         else:
-            flow = InstalledAppFlow.from_client_secrets_file(
-                creds_file, SCOPES)
-            creds = flow.run_local_server(port=0)
+            creds = _run_calendar_oauth_flow(creds_file)
         # Save the credentials for the next run
-        with open('token.json', 'w') as token:
+        with open(token_file, 'w') as token:
             token.write(creds.to_json())
 
     try:
@@ -50,25 +54,38 @@ def get_calendar_service():
         logger.error(f"Error building calendar service: {e}")
         return None
 
-def fetch_todays_events():
+
+def _run_calendar_oauth_flow(creds_file):
+    flow = InstalledAppFlow.from_client_secrets_file(creds_file, SCOPES)
+    return flow.run_local_server(port=0, prompt="consent")
+
+
+def _remove_stale_token(token_file):
+    try:
+        if os.path.exists(token_file):
+            os.remove(token_file)
+    except OSError as e:
+        logger.warning(f"Could not remove stale Google Calendar token at {token_file}: {e}")
+
+def fetch_todays_events(now: datetime.datetime | None = None, service=None):
     logger.info("Fetching today's events")
-    service = get_calendar_service()
+    service = service or get_calendar_service()
     if not service:
         return "I could not access your Google Calendar because credentials are not set up."
 
     try:
-        # Query events for today's IST window.
-        now_ist = datetime.datetime.now(IST)
-        now = now_ist.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+        # Query events from the current time through the end of today.
+        now_ist = _as_ist(now or datetime.datetime.now(IST))
+        start_time = now_ist.isoformat()
         end_of_day = now_ist.replace(hour=23, minute=59, second=59, microsecond=0).isoformat()
         
-        events_result = service.events().list(calendarId='primary', timeMin=now,
+        events_result = service.events().list(calendarId='primary', timeMin=start_time,
                                               timeMax=end_of_day, maxResults=10, singleEvents=True,
                                               orderBy='startTime').execute()
-        events = events_result.get('items', [])
+        events = [_event for _event in events_result.get('items', []) if _should_announce_event(_event, now_ist)]
 
         if not events:
-            return "You have a free day."
+            return "You have no more events today."
         
         response = f"You have to do {len(events)} events today. "
         for event in events:
@@ -85,6 +102,23 @@ def fetch_todays_events():
     except Exception as e:
         logger.error(f"Error fetching schedule: {e}")
         return "There was an error retrieving your schedule."
+
+
+def _as_ist(value: datetime.datetime) -> datetime.datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=IST)
+    return value.astimezone(IST)
+
+
+def _should_announce_event(event, now_ist: datetime.datetime) -> bool:
+    start = (event or {}).get('start', {})
+    start_text = start.get('dateTime') or start.get('date')
+    if not start_text:
+        return False
+    if 'dateTime' not in start:
+        return True
+    start_dt = _as_ist(date_parser.parse(start_text))
+    return start_dt >= now_ist
 
 def create_calendar_event(entity):
     logger.info(f"Creating calendar event from entity: {entity}")

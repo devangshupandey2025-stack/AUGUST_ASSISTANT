@@ -22,9 +22,9 @@ ACK_RESPONSES = [
 ]
 
 STARTUP_GREETINGS = [
-    "Good afternoon. Ready when you are.",
-    "Hey. What do you need?",
-    "Let's get started.",
+    "Good morning.",
+    "Good afternoon.",
+    "Good evening.",
 ]
 
 ACTION_MICRO_RESPONSES = {
@@ -39,10 +39,10 @@ ANSWER_PREFIXES = [
 ]
 
 CASUAL_RESPONSES = {
-    "what's up": "I'm good. What about you?",
-    "whats up": "I'm good. What about you?",
-    "how are you": "I'm good. What about you?",
-    "how r u": "I'm good. What about you?",
+    "what's up": "All good. What do you need?",
+    "whats up": "All good. What do you need?",
+    "how are you": "I'm doing good. What about you?",
+    "how r u": "I'm doing good. What about you?",
 }
 
 HOOKS = [
@@ -57,7 +57,13 @@ class PersonalityEngine:
         self._cursor: dict[str, int] = {}
 
     def casual_response(self, normalized_text: str) -> str:
-        return CASUAL_RESPONSES.get(normalized_text, "")
+        normalized = " ".join((normalized_text or "").split()).lower()
+        if normalized in CASUAL_RESPONSES:
+            return CASUAL_RESPONSES[normalized]
+        for phrase, response in CASUAL_RESPONSES.items():
+            if phrase in normalized and normalized != phrase:
+                return response
+        return ""
 
     def variation(self, category: str) -> str:
         pools = {
@@ -96,8 +102,6 @@ class PersonalityEngine:
             return ""
 
         lowered = cleaned.lower()
-        if lowered.startswith(("good morning,", "good afternoon,", "good evening,")):
-            return self.variation("startup")
         if lowered.startswith("here is your schedule for today."):
             return self._format_schedule(cleaned)
         if lowered.startswith(("searching the web for", "opening google for", "opening youtube results for")):
@@ -177,9 +181,25 @@ class PersonalityEngine:
         details = original[len("Here is your schedule for today.") :].strip()
         if not details:
             return "You've got 0 events today."
-        segments = [segment.strip() for segment in re.split(r"[.;]", details) if segment.strip()]
-        count = len(segments) if segments else 1
-        return f"You've got {count} events today. {details}"
+        count_match = re.search(r"\b(\d+)\s+events?\s+today\b", details, flags=re.IGNORECASE)
+        explicit_count = int(count_match.group(1)) if count_match else None
+        details = re.sub(
+            r"^you(?:'ve| have| have to do)\s+\d+\s+events?\s+today[.:]?\s*",
+            "",
+            details,
+            flags=re.IGNORECASE,
+        ).strip()
+        compact = re.sub(r"\s+", " ", details).strip(" .;")
+        if not compact:
+            return "You've got 0 events today."
+        if explicit_count == 1:
+            return f"You've got 1 event today: {compact}."
+        if explicit_count and explicit_count > 1:
+            return f"You've got {explicit_count} events today: {compact}."
+        segments = [segment.strip(" .;") for segment in re.split(r";", compact) if segment.strip(" .;")]
+        if len(segments) == 1:
+            return f"You've got 1 event today: {segments[0]}."
+        return f"You've got {len(segments)} events today: {'; '.join(segments)}."
 
 
 personality_engine = PersonalityEngine()

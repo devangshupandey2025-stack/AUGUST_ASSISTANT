@@ -35,6 +35,29 @@ A modular, voice-first desktop assistant for **Windows** that listens for a wake
   - Hooks restricted to conceptual explanations only
   - Startup greeting rotation and schedule phrasing cleanup for natural delivery
   - Reduced template overuse to avoid repetitive phrasing
+- Version 4.4.2 quality and safety refinements:
+  - Mixed-intent casual detection now prioritizes casual responses (example: `how are you automatic trading`)
+  - Answer-memory safety filters block weak/casual/fallback-style entries from being stored
+  - Weak confirmations like `yes` now resolve safely: fallback prompts map to search, unrelated `yes` is ignored cleanly
+  - Wake phrase text normalization hardens command cleanup by rejecting noisy wake-phrase-injected inputs
+  - Unclear-input responses are normalized to a single clean fallback line
+  - Schedule phrasing now uses singular/plural grammar correctly (for example, `You've got 1 event today: ...`)
+- Version 4.4.3 context-priority fixes:
+  - `last_query` now updates via priority rules (blocks trivial/casual inputs and accepts meaningful queries)
+  - Forced `last_query` capture for valid informational question classes (comparison, conceptual, algorithmic, factual)
+  - Fallback search-offer prompts now persist the active query so follow-ups resolve correctly
+  - `search it` now always resolves from the latest valid contextual query
+  - Added explicit logging when `last_query` changes for easier runtime tracing
+- Version 4.5.1 HUD overlay UI update:
+  - Tkinter interface is now frameless and always-on-top for a floating desktop HUD
+  - Window is compact (`500x500`) and anchored to the bottom-right corner
+  - Windows color-key transparency is enabled so the black background is invisible
+  - Background framework grid is removed to keep only the animated central HUD visual
+- Version 4.5.2 compact overlay refinement:
+  - HUD window is reduced to `320x320` and pinned tighter to the bottom-right corner
+  - Core HUD drawing now scales with window size (`radius = min(w, h) * 0.25`) for clarity at small dimensions
+  - Visual density is reduced by removing side panels/waveform clutter and keeping a minimal circular core with rotating segments
+  - Stroke styling is tightened for a cleaner, non-intrusive overlay appearance
 - Action execution for:
   - Open/close apps
   - Web/search actions (Google/YouTube/Gmail/GitHub/Reddit)

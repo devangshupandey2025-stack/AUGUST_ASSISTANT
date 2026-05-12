@@ -21,6 +21,7 @@ class MemoryStore:
         self.memory_path = Path(memory_path)
         self._lock = threading.RLock()
         self._data = self._load()
+        self._execution_learning_enabled = False
 
     def _default_state(self) -> dict[str, Any]:
         return {
@@ -88,6 +89,8 @@ class MemoryStore:
             self._write(self._data)
 
     def get_learned_plan(self, phrase: str) -> list[dict[str, Any]] | None:
+        if not self._execution_learning_enabled:
+            return None
         with self._lock:
             return copy.deepcopy(self._data.get("learned_patterns", {}).get(phrase))
 
@@ -152,6 +155,31 @@ class MemoryStore:
         with self._lock:
             history = self._data.get("command_history", [])
             return [entry.get("text", "") for entry in history[-limit:]]
+
+    def get_last_app(self) -> str:
+        with self._lock:
+            history = list(reversed(self._data.get("command_history", [])))
+            for entry in history:
+                for command in reversed(entry.get("commands", [])):
+                    payload = command.get("payload", {})
+                    app_name = str(payload.get("app", "")).strip().lower()
+                    if app_name:
+                        return app_name
+            return ""
+
+    def get_last_action(self) -> str:
+        with self._lock:
+            history = list(reversed(self._data.get("command_history", [])))
+            for entry in history:
+                for command in reversed(entry.get("commands", [])):
+                    action = str(command.get("action", "")).strip().lower()
+                    if action:
+                        return action
+            return ""
+
+    def suggest_next_app(self, time_of_day: str) -> str:
+        suggestions = self.suggest_frequent_apps(time_of_day, limit=1)
+        return suggestions[0] if suggestions else ""
 
     def suggest_frequent_apps(self, time_of_day: str, limit: int = 2) -> list[str]:
         with self._lock:

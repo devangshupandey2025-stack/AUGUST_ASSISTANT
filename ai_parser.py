@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -8,6 +9,7 @@ from typing import Any
 import requests
 
 from config import config
+from conversation_memory import get_faq_answer, get_last_topic, get_preferred_style, normalize_text
 from intent_parser import CommandPlan, ParsedCommand, SUPPORTED_ACTIONS
 from utils.logger import get_logger, log_event
 
@@ -19,7 +21,19 @@ class AIParserError(Exception):
 
 
 @dataclass
+class AnswerResult:
+    text: str
+    source: str = "ai"
+    should_offer_search: bool = False
+    fallback_query: str = ""
+    topic: str = ""
+    error: str = ""
+
+
+@dataclass
 class AIParser:
+    ANSWER_RETRY_LIMIT = 2
+
     endpoint_template: str = config.gemini["api_url"]
     model: str = config.gemini["model"]
     timeout_seconds: int = int(config.gemini["timeout_seconds"])
@@ -27,6 +41,10 @@ class AIParser:
     api_key: str = config.gemini["api_key"]
 
     def parse(self, user_input: str, context: dict[str, Any] | None = None) -> CommandPlan | None:
+        normalized = normalize_text(user_input)
+        if self._looks_like_question(normalized) or self._is_follow_up(normalized):
+            log_event(logger, "ai_parse_skipped", source="ai", reason="answer_query", success=True)
+            return None
         if not self.api_key:
             log_event(logger, "ai_parse_skipped", source="ai", reason="missing_api_key", success=False)
             return self._safe_fallback(user_input)
@@ -40,7 +58,8 @@ class AIParser:
         last_error: str | None = None
         invalid_retry_available = True
 
-        for attempt in range(1, self.max_retries + 2):
+        total_attempts = self.max_retries + 1
+        for attempt in range(1, total_attempts + 1):
             started = time.perf_counter()
             try:
                 response = requests.post(
@@ -88,33 +107,217 @@ class AIParser:
                 last_error = str(exc)
                 if invalid_retry_available:
                     invalid_retry_available = False
-                    log_event(
-                        logger,
-                        "ai_validation_retry",
-                        source="ai",
-                        success=False,
-                        attempt=attempt,
-                        reason=last_error,
-                    )
+                    backoff_seconds = self._backoff_seconds(attempt)
+                    log_event(logger, "ai_retry", source="ai", success=False, attempt=attempt, reason=last_error, backoff_seconds=backoff_seconds)
+                    time.sleep(backoff_seconds)
                     continue
             except requests.RequestException as exc:
                 last_error = str(exc)
 
             elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+            if attempt <= self.max_retries:
+                backoff_seconds = self._backoff_seconds(attempt)
+                log_event(
+                    logger,
+                    "ai_retry",
+                    source="ai",
+                    success=False,
+                    attempt=attempt,
+                    execution_time_ms=elapsed_ms,
+                    reason=last_error,
+                    backoff_seconds=backoff_seconds,
+                )
+                time.sleep(backoff_seconds)
+                continue
             log_event(
                 logger,
-                "ai_parse_failure",
+                "ai_final_failure",
                 source="ai",
                 success=False,
                 attempt=attempt,
                 execution_time_ms=elapsed_ms,
-                reason=last_error,
+                reason=last_error or "unknown",
+                backoff_seconds=0.0,
             )
-            if attempt <= self.max_retries:
-                time.sleep(self._backoff_seconds(attempt))
+            break
 
-        log_event(logger, "ai_parse_fallback", source="fallback", success=False, reason=last_error or "unknown")
         return self._safe_fallback(user_input)
+
+    def answer(self, user_input: str, context: dict[str, Any] | None = None, memory: dict[str, Any] | None = None) -> str:
+        return self.answer_with_fallback(user_input, context=context, memory=memory).text
+
+    def try_ai_answer(
+        self,
+        user_input: str,
+        context: dict[str, Any] | None = None,
+        memory: dict[str, Any] | None = None,
+    ) -> dict[str, str | bool]:
+        context = context or {}
+        memory = memory or {}
+        if not self.api_key:
+            return {"success": False, "text": "", "error": "missing_api_key"}
+
+        prompt = self._build_answer_prompt(user_input, context, memory)
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.2,
+            },
+        }
+        payload_error = self._validate_request_payload(payload)
+        if payload_error:
+            return {"success": False, "text": "", "error": "invalid_payload"}
+
+        last_error = "unknown"
+        total_attempts = self.ANSWER_RETRY_LIMIT + 1
+        for attempt in range(1, total_attempts + 1):
+            try:
+                response = requests.post(
+                    self.endpoint_template.format(model=self.model),
+                    json=payload,
+                    timeout=self.timeout_seconds,
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": self.api_key,
+                    },
+                )
+
+                response.raise_for_status()
+                result = response.json()
+                text = self._extract_candidate_text(result)
+                answer = " ".join(text.split())
+                if not answer:
+                    return {"success": False, "text": "", "error": "invalid_payload"}
+                return {"success": True, "text": answer, "error": ""}
+            except requests.Timeout:
+                last_error = "timeout"
+            except requests.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else "unknown"
+                last_error = f"http_{status}"
+            except (json.JSONDecodeError, AIParserError, ValueError, TypeError):
+                return {"success": False, "text": "", "error": "invalid_payload"}
+            except requests.RequestException as exc:
+                last_error = str(exc) or "request_error"
+            except Exception as exc:
+                last_error = str(exc) or "unknown"
+
+            if attempt <= self.ANSWER_RETRY_LIMIT and self._is_retryable_answer_error(last_error):
+                backoff_seconds = self._answer_backoff_seconds(attempt)
+                log_event(
+                    logger,
+                    "ai_retry",
+                    source="ai",
+                    success=False,
+                    attempt=attempt,
+                    reason=last_error,
+                    backoff_seconds=backoff_seconds,
+                )
+                time.sleep(backoff_seconds)
+                continue
+            break
+
+        log_event(logger, "ai_final_failure", source="ai", success=False, attempt=total_attempts, reason=last_error, backoff_seconds=0.0)
+        return {"success": False, "text": "", "error": last_error}
+
+    def answer_with_fallback(
+        self,
+        user_input: str,
+        context: dict[str, Any] | None = None,
+        memory: dict[str, Any] | None = None,
+    ) -> AnswerResult:
+        context = context or {}
+        memory = memory or {}
+        normalized = normalize_text(user_input)
+        remembered = get_faq_answer(memory, normalized)
+        if remembered:
+            return AnswerResult(
+                text=remembered,
+                source="memory",
+                topic=self._extract_topic(user_input, context, memory),
+            )
+
+        if not self.api_key:
+            log_event(logger, "ai_answer_skipped", source="ai", reason="missing_api_key", success=False)
+            return self._offline_answer_result(user_input, context, memory, error="missing_api_key")
+
+        prompt = self._build_answer_prompt(user_input, context, memory)
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0.2,
+            },
+        }
+
+        last_error: str | None = None
+        total_attempts = self.max_retries + 1
+        for attempt in range(1, total_attempts + 1):
+            started = time.perf_counter()
+            try:
+                response = requests.post(
+                    self.endpoint_template.format(model=self.model),
+                    json=payload,
+                    timeout=self.timeout_seconds,
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": self.api_key,
+                    },
+                )
+                response.raise_for_status()
+                result = response.json()
+                text = self._extract_candidate_text(result)
+                answer = " ".join(text.split())
+                if not answer:
+                    raise AIParserError("empty_answer")
+                elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+                log_event(
+                    logger,
+                    "ai_answer_success",
+                    source="ai",
+                    success=True,
+                    attempt=attempt,
+                    execution_time_ms=elapsed_ms,
+                )
+                return AnswerResult(
+                    text=answer,
+                    source="ai",
+                    topic=self._extract_topic(user_input, context, memory),
+                )
+            except requests.Timeout:
+                last_error = "timeout"
+            except requests.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else "unknown"
+                last_error = f"http_{status}"
+            except (requests.RequestException, AIParserError) as exc:
+                last_error = str(exc)
+
+            elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+            if attempt <= self.max_retries:
+                backoff_seconds = self._backoff_seconds(attempt)
+                log_event(
+                    logger,
+                    "ai_retry",
+                    source="ai",
+                    success=False,
+                    attempt=attempt,
+                    execution_time_ms=elapsed_ms,
+                    reason=last_error,
+                    backoff_seconds=backoff_seconds,
+                )
+                time.sleep(backoff_seconds)
+                continue
+            log_event(
+                logger,
+                "ai_final_failure",
+                source="ai",
+                success=False,
+                attempt=attempt,
+                execution_time_ms=elapsed_ms,
+                reason=last_error or "unknown",
+                backoff_seconds=0.0,
+            )
+            break
+
+        return self._offline_answer_result(user_input, context, memory, error=last_error or "unknown")
 
     def _build_request_payload(self, user_input: str, context: dict[str, Any]) -> dict[str, Any]:
         prompt = self._build_prompt(user_input, context)
@@ -125,6 +328,33 @@ class AIParser:
                 "temperature": 0,
             },
         }
+
+    def _build_answer_prompt(self, user_input: str, context: dict[str, Any], memory: dict[str, Any]) -> str:
+        recent_commands = memory.get("command_history", [])[-3:]
+        preferred_style = get_preferred_style(memory)
+        last_topic = str(context.get("last_topic") or get_last_topic(memory) or "").strip()
+        return f"""
+You are the spoken answer layer for a Windows voice assistant named Jarvis.
+Answer the user's informational question directly.
+Keep the answer concise, accurate, and easy to read aloud.
+Do not return JSON.
+Do not describe internal tools.
+If the question is ambiguous, make the best reasonable interpretation and say so briefly.
+Respect the user's preferred response style: {preferred_style}.
+If the message is a follow-up such as "give example" or "tell me more", continue the previous topic when it is provided.
+
+Current context:
+{json.dumps(context, ensure_ascii=True)}
+
+Recent memory:
+{json.dumps(recent_commands, ensure_ascii=True)}
+
+Previous topic:
+{last_topic or "none"}
+
+User question:
+{user_input}
+""".strip()
 
     def _validate_request_payload(self, payload: dict[str, Any]) -> str | None:
         if not isinstance(payload, dict):
@@ -166,7 +396,8 @@ Rules:
 4. Use search_web for browsing, watching, websites, songs, or search requests.
 5. Use site youtube for songs, videos, or play requests.
 6. Never return open_app for google, youtube, gmail, github, or reddit.
-7. If the request is ambiguous, convert it into one safe search_web action.
+7. If the request is ambiguous, return an empty JSON array instead of guessing.
+8. If the request is informational, conversational, toxic, or casual chat, return an empty JSON array.
 
 Current context:
 {json.dumps(context, ensure_ascii=True)}
@@ -252,6 +483,18 @@ User input:
 
     def _safe_fallback(self, user_input: str) -> CommandPlan:
         cleaned = " ".join((user_input or "").strip().lower().split())
+        if self._looks_like_question(cleaned) or self._looks_conversational(cleaned) or self._looks_toxic(cleaned):
+            return None
+        if self._looks_unclear(cleaned):
+            return None
+        if cleaned.startswith("search ") or cleaned.startswith("google ") or cleaned.startswith("find ") or cleaned.startswith("look up "):
+            query = cleaned.split(" ", 1)[1].strip() if " " in cleaned else ""
+            if query:
+                return CommandPlan(
+                    commands=[ParsedCommand(action="search_web", payload={"site": "google", "query": query}, source="fallback", priority=85)],
+                    raw_text=user_input,
+                    source="fallback",
+                )
         if cleaned.startswith("youtube for "):
             return CommandPlan(
                 commands=[ParsedCommand(action="search_web", payload={"site": "youtube", "query": cleaned[12:]}, source="fallback", priority=90)],
@@ -264,11 +507,139 @@ User input:
                 raw_text=user_input,
                 source="fallback",
             )
-        return CommandPlan(
-            commands=[ParsedCommand(action="search_web", payload={"site": "google", "query": cleaned}, source="fallback", priority=80)],
-            raw_text=user_input,
-            source="fallback",
-        )
+        if cleaned.startswith(("watch ", "play ")):
+            query = cleaned.split(" ", 1)[1].strip() if " " in cleaned else ""
+            if query:
+                return CommandPlan(
+                    commands=[ParsedCommand(action="search_web", payload={"site": "youtube", "query": query}, source="fallback", priority=90)],
+                    raw_text=user_input,
+                    source="fallback",
+                )
+        if re.match(r"^open\s+(youtube|google|gmail|github|reddit)\b(?:\s+for\s+(.+))?$", cleaned):
+            match = re.match(r"^open\s+(youtube|google|gmail|github|reddit)\b(?:\s+for\s+(.+))?$", cleaned)
+            if match:
+                payload = {"site": match.group(1)}
+                if match.group(2):
+                    payload["query"] = match.group(2).strip()
+                return CommandPlan(
+                    commands=[ParsedCommand(action="search_web", payload=payload, source="fallback", priority=90)],
+                    raw_text=user_input,
+                    source="fallback",
+                )
+        return None
 
     def _backoff_seconds(self, attempt: int) -> float:
         return min(6.0, 0.75 * (2 ** (attempt - 1)))
+
+    def _answer_backoff_seconds(self, attempt: int) -> float:
+        return min(1.0, 0.5 * (2 ** (attempt - 1)))
+
+    def _is_retryable_answer_error(self, error: str) -> bool:
+        normalized = str(error or "").strip().lower()
+        return normalized in {"timeout", "http_429", "http_503", "request_error"} or "connection" in normalized
+
+    def _offline_answer_result(
+        self,
+        user_input: str,
+        context: dict[str, Any],
+        memory: dict[str, Any],
+        error: str,
+    ) -> AnswerResult:
+        normalized = normalize_text(user_input)
+        topic = self._extract_topic(user_input, context, memory)
+        if normalized.startswith("do you think"):
+            return AnswerResult(
+                text="I think it depends on the situation. If you want, I can look it up and give you a clearer answer.",
+                source="fallback",
+                should_offer_search=True,
+                fallback_query=topic or normalized,
+                topic=topic,
+                error=error,
+            )
+        if normalized.startswith("which is better"):
+            return AnswerResult(
+                text="That usually depends on what matters most to you. Want me to search the latest comparisons?",
+                source="fallback",
+                should_offer_search=True,
+                fallback_query=topic or normalized,
+                topic=topic,
+                error=error,
+            )
+        if self._is_follow_up(normalized) and topic:
+            return AnswerResult(
+                text=f"I can keep going on {topic}, but I'm having trouble fetching the full answer right now. Want me to search it?",
+                source="fallback",
+                should_offer_search=True,
+                fallback_query=topic,
+                topic=topic,
+                error=error,
+            )
+        return AnswerResult(
+            text="I'm having trouble with that. Want me to search it?",
+            source="fallback",
+            should_offer_search=True,
+            fallback_query=topic or normalized,
+            topic=topic,
+            error=error,
+        )
+
+    def _extract_topic(self, user_input: str, context: dict[str, Any], memory: dict[str, Any]) -> str:
+        normalized = normalize_text(user_input)
+        if self._is_follow_up(normalized):
+            last_topic = str(context.get("last_topic") or get_last_topic(memory) or "").strip()
+            return last_topic or normalized
+        stripped = re.sub(
+            r"^(what is|what's|who is|why|how|tell me about|can you explain|explain|is it true that|do you think|which is better)\s+",
+            "",
+            normalized,
+        )
+        return stripped or normalized
+
+    def _is_follow_up(self, normalized: str) -> bool:
+        return normalized in {
+            "give example",
+            "an example",
+            "example",
+            "tell me more",
+            "go on",
+            "continue",
+            "why is that",
+            "how so",
+            "explain more",
+        } or normalized.startswith(("give me an example", "can you give an example"))
+
+    def _looks_like_question(self, normalized: str) -> bool:
+        if "?" in normalized:
+            return True
+        return normalized.startswith(
+            (
+                "what ",
+                "what's ",
+                "who ",
+                "why ",
+                "how ",
+                "which ",
+                "tell me about",
+                "can you explain",
+                "is it true that",
+                "do you think",
+                "which ai is best",
+            )
+        )
+
+    def _looks_conversational(self, normalized: str) -> bool:
+        return normalized in {
+            "hi",
+            "hello",
+            "hey",
+            "thanks",
+            "thank you",
+            "how are you",
+        }
+
+    def _looks_unclear(self, normalized: str) -> bool:
+        tokens = normalized.split()
+        return len(tokens) <= 2 and normalized not in {"open chrome", "open spotify", "close chrome", "close spotify"}
+
+    def _looks_toxic(self, normalized: str) -> bool:
+        return any(term in normalized for term in ("fuck you", "screw you", "idiot", "stupid"))
