@@ -58,6 +58,12 @@ A modular, voice-first desktop assistant for **Windows** that listens for a wake
   - Core HUD drawing now scales with window size (`radius = min(w, h) * 0.25`) for clarity at small dimensions
   - Visual density is reduced by removing side panels/waveform clutter and keeping a minimal circular core with rotating segments
   - Stroke styling is tightened for a cleaner, non-intrusive overlay appearance
+- Version 4.6 precision and transport reliability patch:
+  - Web research transport failures now fail safely with graceful fallback handling and recovery logs
+  - Query classification was refined so static knowledge, reasoning, dynamic facts, and conversational input route more accurately
+  - Knowledge context is preserved for valid knowledge queries even when research/summarization fails
+  - Added lightweight sanity validation to block malformed factual queries from polluting long-term knowledge memory
+  - Conversational prompts are isolated from permanent knowledge storage
 - Action execution for:
   - Open/close apps
   - Web/search actions (Google/YouTube/Gmail/GitHub/Reddit)

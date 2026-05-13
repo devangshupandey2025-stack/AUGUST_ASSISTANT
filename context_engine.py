@@ -7,6 +7,7 @@ from typing import Any
 
 from config import config
 from followup_utils import is_follow_up_query
+from knowledge_governor import KnowledgeGovernor
 from utils.logger import get_logger, log_event
 
 logger = get_logger("Context")
@@ -43,12 +44,15 @@ class ContextEngine:
         self._recent_commands: deque[str] = deque(maxlen=history_size)
         self._last_interaction_at = datetime.datetime.now(IST)
         self._last_query = ""
+        self._last_knowledge_query = ""
+        self._last_action_query = ""
         self._last_answer = ""
         self._last_action = ""
         self._last_app = ""
         self._pending_interaction: dict[str, Any] | None = None
         self._conversation_history: deque[dict[str, str]] = deque(maxlen=history_size)
         self._candidate_query = ""
+        self.knowledge_governor = KnowledgeGovernor()
 
     def get_time_of_day(self, now: datetime.datetime | None = None) -> str:
         current = now.astimezone() if now else datetime.datetime.now().astimezone()
@@ -78,6 +82,8 @@ class ContextEngine:
 
         if normalized_command:
             self._recent_commands.append(normalized_command)
+            if self.knowledge_governor.is_conversational_query(normalized_command):
+                skip_query_update = True
             if not skip_query_update:
                 self._candidate_query = normalized_command
             if self._is_reset_command(normalized_command):
@@ -90,14 +96,29 @@ class ContextEngine:
                 self._pending_interaction = None
                 logger.info("Context cleared pending interaction due to unrelated command")
 
-        command_app, command_action = self._extract_plan_state(plan)
+        command_app, command_action, command_query = self._extract_plan_state(plan)
         if command_action:
             self._last_action = command_action
+            if normalized_command:
+                self._last_action_query = normalized_command
+                log_event(logger, "action_context_updated", source="context", success=True, query=self._last_action_query, action=command_action)
             if command_action == "open_app" and command_app:
                 self._last_app = command_app
-            if not skip_query_update and command_action == "search_web" and self._should_capture_answer_query(normalized_command):
-                self._last_query = normalized_command
-                logger.info("last_query updated -> %s", self._last_query)
+            if not skip_query_update and command_action in {"search_web", "web_research"}:
+                candidate_knowledge = command_query or normalized_command or self._candidate_query
+                if self._should_capture_answer_query(candidate_knowledge):
+                    self._last_query = candidate_knowledge
+                    self._last_knowledge_query = candidate_knowledge
+                    logger.info("last_query updated -> %s", self._last_query)
+                    log_event(logger, "knowledge_context_updated", source="context", success=True, query=self._last_knowledge_query)
+                    if command_action == "web_research":
+                        log_event(
+                            logger,
+                            "knowledge_context_preserved_after_failure",
+                            source="context",
+                            success=True,
+                            query=self._last_knowledge_query,
+                        )
             if response_text:
                 self._last_answer = response_text.strip()
             self._append_history(self._last_query, self._last_answer)
@@ -114,7 +135,9 @@ class ContextEngine:
             self._last_action = normalized_action
             if not skip_query_update and normalized_action == "answer_query" and self._should_capture_answer_query(self._candidate_query):
                 self._last_query = self._candidate_query
+                self._last_knowledge_query = self._candidate_query
                 logger.info("last_query updated -> %s", self._last_query)
+                log_event(logger, "knowledge_context_updated", source="context", success=True, query=self._last_knowledge_query)
                 if response_text:
                     self._last_answer = response_text.strip()
                 self._append_history(self._last_query, self._last_answer)
@@ -137,6 +160,8 @@ class ContextEngine:
         pending = dict(self._pending_interaction) if self._pending_interaction else None
         return {
             "last_query": self._last_query,
+            "last_knowledge_query": self._last_knowledge_query or self._last_query,
+            "last_action_query": self._last_action_query,
             "last_answer": self._last_answer,
             "last_action": self._last_action,
             "last_app": self._last_app,
@@ -218,17 +243,18 @@ class ContextEngine:
         recent = list(self._recent_commands)[-2:]
         return "Recently you asked about " + " and ".join(recent) + "."
 
-    def _extract_plan_state(self, plan: Any | None) -> tuple[str, str]:
+    def _extract_plan_state(self, plan: Any | None) -> tuple[str, str, str]:
         if not plan:
-            return "", ""
+            return "", "", ""
         commands = getattr(plan, "commands", None) or []
         if not commands:
-            return "", ""
+            return "", "", ""
         latest = commands[-1]
         action = str(getattr(latest, "action", "") or "").strip().lower()
         payload = getattr(latest, "payload", {}) or {}
         app = str(payload.get("app", "") or "").strip().lower()
-        return app, action
+        query = str(payload.get("query", "") or "").strip().lower()
+        return app, action, query
 
     def _normalize(self, text: str | None) -> str:
         return re.sub(r"\s+", " ", (text or "").strip().lower())
@@ -308,6 +334,8 @@ class ContextEngine:
             return False
         if is_follow_up_query(normalized):
             return False
+        if self.knowledge_governor.is_conversational_query(normalized):
+            return False
         if self._should_update_last_query(normalized):
             return True
         return self._is_forced_question_query(normalized)
@@ -317,6 +345,8 @@ class ContextEngine:
         if not normalized:
             return False
         if is_follow_up_query(normalized):
+            return False
+        if self.knowledge_governor.is_conversational_query(normalized):
             return False
         if normalized in self.INVALID_CONTEXT_INPUTS:
             return False
@@ -354,6 +384,8 @@ class ContextEngine:
 
     def _reset_context(self, keep_recent: bool) -> None:
         self._last_query = ""
+        self._last_knowledge_query = ""
+        self._last_action_query = ""
         self._last_answer = ""
         self._last_action = ""
         self._last_app = ""

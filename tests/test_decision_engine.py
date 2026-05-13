@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -11,6 +11,7 @@ import requests
 
 from app_registry import AppRegistry
 from ai_parser import AIParser, AnswerResult
+from answer_memory import AnswerMemory
 from context_engine import ContextEngine, IST
 from decision_engine import DecisionEngine
 from document_generator import generate_document
@@ -36,6 +37,12 @@ class DummyAIParser:
         if self.ai_success:
             return {"success": True, "text": f"answer:{user_input}", "error": ""}
         return {"success": False, "text": "", "error": "http_503"}
+
+    def summarize_web_content(self, text, query="", source_url="", title=""):
+        del source_url, title
+        if not self.ai_success:
+            return {"success": False, "text": "", "error": "http_503"}
+        return {"success": True, "text": f"summary:{query}", "error": ""}
 
 
 class FakeAppRegistry:
@@ -90,9 +97,8 @@ class DecisionEngineTests(unittest.TestCase):
             memory=self.memory.snapshot(),
         )
 
-        self.assertEqual(result.mode, "action")
-        self.assertEqual(result.plan.commands[0].action, "open_app")
-        self.assertEqual(result.plan.commands[0].payload["app"], "quantum mixtape")
+        self.assertEqual(result.mode, "answer")
+        self.assertEqual(result.response, "Did you want me to search that instead?")
 
     def test_open_youtube_for_song_becomes_search(self) -> None:
         parsed_plan = CommandPlan(
@@ -164,9 +170,8 @@ class DecisionEngineTests(unittest.TestCase):
             memory=self.memory.snapshot(),
         )
 
-        self.assertEqual(result.mode, "answer")
-        self.assertIsNone(result.plan)
-        self.assertIn("answer:what is the difference between lists and tuples", result.response)
+        self.assertEqual(result.mode, "action")
+        self.assertEqual(result.plan.commands[0].action, "web_research")
 
     def test_conversational_question_prefers_answer_mode_over_search(self) -> None:
         parsed_plan = CommandPlan(
@@ -255,7 +260,7 @@ class DecisionEngineTests(unittest.TestCase):
 
         self.assertEqual(second.mode, "answer")
         self.assertNotEqual(self.engine.ai_parser.last_ai_query, "explain more")
-        self.assertIn("what is polymorphism", self.engine.ai_parser.last_ai_query)
+        self.assertIn("polymorphism", second.response.lower())
 
     def test_ambiguous_open_app_asks_for_clarification_then_resolves(self) -> None:
         registry = FakeAppRegistry(
@@ -294,10 +299,163 @@ class DecisionEngineTests(unittest.TestCase):
             memory=self.memory.snapshot(),
         )
 
-        self.assertEqual(result.mode, "answer")
-        self.assertIn("narendra modi", result.response.lower())
+        self.assertEqual(result.mode, "action")
+        self.assertEqual(result.plan.commands[0].action, "web_research")
 
-    def test_ai_failure_returns_controlled_fallback_without_crash(self) -> None:
+    def test_local_fallback_answers_west_bengal_chief_minister_when_ai_fails(self) -> None:
+        engine = DecisionEngine(ai_parser=DummyAIParser(ai_success=False), memory_store=self.memory, app_registry=self.registry)
+        result = engine.decide(
+            raw_text="who is the chief minister of westbengal",
+            parsed_plan=None,
+            context={"last_app": "", "time_of_day": "afternoon"},
+            memory=self.memory.snapshot(),
+        )
+
+        self.assertEqual(result.mode, "action")
+        self.assertEqual(result.plan.commands[0].action, "web_research")
+
+    def test_local_fallback_answers_suvendu_adhikari_when_ai_fails(self) -> None:
+        engine = DecisionEngine(ai_parser=DummyAIParser(ai_success=False), memory_store=self.memory, app_registry=self.registry)
+        result = engine.decide(
+            raw_text="who is suvendhu adhikari",
+            parsed_plan=None,
+            context={"last_app": "", "time_of_day": "afternoon"},
+            memory=self.memory.snapshot(),
+        )
+
+        self.assertEqual(result.mode, "answer")
+        self.assertIn("suvendu adhikari", result.response.lower())
+
+    def test_static_classification_for_red_blood_cell(self) -> None:
+        query_type = self.engine._classify_query_type("what is a red blood cell", parsed_plan=None)
+        self.assertEqual(query_type, "static_knowledge")
+
+    def test_conversation_classification_for_how_are_you(self) -> None:
+        query_type = self.engine._classify_query_type("how are you", parsed_plan=None)
+        self.assertEqual(query_type, "conversation")
+
+    def test_invalid_capital_query_is_sanity_blocked_and_not_stored(self) -> None:
+        result = self.engine.decide(
+            raw_text="what is the capital of kolkata",
+            parsed_plan=None,
+            context={"last_app": "", "time_of_day": "afternoon"},
+            memory=self.memory.snapshot(),
+        )
+
+        self.assertEqual(result.mode, "answer")
+        self.assertEqual(result.source, "decision.sanity_guard")
+        self.assertIn("mean", result.response.lower())
+        self.assertEqual(self.memory.snapshot().get("answer_memory", []), [])
+
+    def test_invalid_political_query_is_sanity_blocked(self) -> None:
+        result = self.engine.decide(
+            raw_text="who is the prime minister of california",
+            parsed_plan=None,
+            context={"last_app": "", "time_of_day": "afternoon"},
+            memory=self.memory.snapshot(),
+        )
+
+        self.assertEqual(result.mode, "answer")
+        self.assertEqual(result.source, "decision.sanity_guard")
+        self.assertIn("governor", result.response.lower())
+
+    def test_memory_entity_conflict_rejects_wrong_state_fact(self) -> None:
+        answer_memory = AnswerMemory(memory_store=self.memory)
+        stored = answer_memory.store(
+            "who is the chief minister of west bengal",
+            "Mamata Banerjee is the chief minister of West Bengal.",
+            confidence=0.95,
+            source="ai",
+        )
+
+        self.assertTrue(stored)
+        self.assertIsNone(answer_memory.retrieve("who is the chief minister of karnataka"))
+
+    def test_conversational_fragment_is_not_stored_in_answer_memory(self) -> None:
+        answer_memory = AnswerMemory(memory_store=self.memory)
+        stored = answer_memory.store(
+            "tell me more",
+            "Here is a more detailed explanation of the previous topic.",
+            confidence=0.9,
+            source="ai",
+        )
+
+        self.assertFalse(stored)
+        self.assertEqual(self.memory.snapshot().get("answer_memory", []), [])
+
+    def test_expired_dynamic_fact_is_ignored(self) -> None:
+        answer_memory = AnswerMemory(memory_store=self.memory)
+        old_timestamp = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        answer_memory.store(
+            "who is the chief minister of karnataka",
+            "Siddaramaiah is the chief minister of Karnataka.",
+            confidence=0.95,
+            timestamp=old_timestamp,
+            source="ai",
+        )
+
+        self.assertIsNone(answer_memory.retrieve("who is the chief minister of karnataka"))
+
+    def test_static_concept_memory_retrieval_is_allowed(self) -> None:
+        answer_memory = AnswerMemory(memory_store=self.memory)
+        answer = "Polymorphism lets the same interface behave differently for different object types."
+        stored = answer_memory.store("what is polymorphism", answer, confidence=0.9, source="local")
+
+        self.assertTrue(stored)
+        self.assertEqual(answer_memory.retrieve("what is polymorphism"), answer)
+
+    def test_memory_dedup_updates_existing_entry_only(self) -> None:
+        answer_memory = AnswerMemory(memory_store=self.memory)
+        answer = "Polymorphism lets the same interface behave differently for different object types."
+        first = answer_memory.store("what is polymorphism", answer, confidence=0.9, source="local", timestamp="2026-05-12T00:00:00+00:00")
+        second = answer_memory.store("what is polymorphism?", answer, confidence=0.88, source="local", timestamp="2026-05-13T00:00:00+00:00")
+        entries = self.memory.snapshot().get("answer_memory", [])
+
+        self.assertTrue(first)
+        self.assertTrue(second)
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["timestamp"], "2026-05-13T00:00:00+00:00")
+
+    def test_session_cache_reuses_recent_answer(self) -> None:
+        result = self.engine.decide(
+            raw_text="what is polymorphism",
+            parsed_plan=None,
+            context={"last_app": "", "time_of_day": "afternoon"},
+            memory=self.memory.snapshot(),
+        )
+        cached = self.engine.decide(
+            raw_text="what is polymorphism",
+            parsed_plan=None,
+            context={"last_app": "", "time_of_day": "afternoon"},
+            memory=self.memory.snapshot(),
+        )
+
+        self.assertEqual(result.mode, "answer")
+        self.assertEqual(cached.source, "decision.session_cache")
+        self.assertIn("session_cache_hit", cached.notes)
+
+    def test_dynamic_fact_prefers_web_research_over_memory(self) -> None:
+        answer_memory = AnswerMemory(memory_store=self.memory)
+        answer_memory.store(
+            "who is the chief minister of karnataka",
+            "Old answer says someone is the chief minister of Karnataka.",
+            confidence=0.95,
+            source="ai",
+        )
+        engine = DecisionEngine(ai_parser=DummyAIParser(ai_success=True), memory_store=self.memory, app_registry=self.registry)
+
+        result = engine.decide(
+            raw_text="who is the chief minister of karnataka",
+            parsed_plan=None,
+            context={"last_app": "", "time_of_day": "afternoon"},
+            memory=self.memory.snapshot(),
+        )
+
+        self.assertEqual(result.mode, "action")
+        self.assertEqual(result.plan.commands[0].action, "web_research")
+        self.assertEqual(result.plan.commands[0].payload["query"], "who is the chief minister of karnataka")
+
+    def test_ai_failure_routes_informational_query_to_web_research(self) -> None:
         engine = DecisionEngine(ai_parser=DummyAIParser(ai_success=False), memory_store=self.memory, app_registry=self.registry)
         first = engine.decide(
             raw_text="explain distributed tracing internals in modern service meshes",
@@ -305,18 +463,26 @@ class DecisionEngineTests(unittest.TestCase):
             context={"last_app": "", "time_of_day": "afternoon"},
             memory=self.memory.snapshot(),
         )
-        self.assertEqual(first.mode, "answer")
-        self.assertEqual(first.response, "I'm having trouble getting a reliable answer. Do you want me to search it?")
+        self.assertEqual(first.mode, "action")
+        self.assertEqual(first.plan.commands[0].action, "web_research")
+        self.assertEqual(first.plan.commands[0].payload["query"], "explain distributed tracing internals in modern service meshes")
 
-        second = engine.decide(
-            raw_text="search it",
-            parsed_plan=None,
+    def test_browser_search_does_not_trigger_web_research(self) -> None:
+        parsed_plan = CommandPlan(
+            commands=[ParsedCommand(action="search_web", payload={"site": "google", "query": "cats"}, source="rule")],
+            raw_text="search for cats",
+            source="rule",
+        )
+
+        result = self.engine.decide(
+            raw_text="search for cats",
+            parsed_plan=parsed_plan,
             context={"last_app": "", "time_of_day": "afternoon"},
             memory=self.memory.snapshot(),
         )
-        self.assertEqual(second.mode, "action")
-        self.assertEqual(second.plan.commands[0].action, "search_web")
-        self.assertEqual(second.plan.commands[0].payload["site"], "google")
+
+        self.assertEqual(result.mode, "action")
+        self.assertEqual(result.plan.commands[0].action, "search_web")
 
     def test_low_confidence_does_not_execute(self) -> None:
         result = self.engine.decide(
@@ -436,7 +602,61 @@ class DecisionEngineTests(unittest.TestCase):
         )
         self.assertEqual(result.mode, "action")
         self.assertEqual(result.plan.commands[0].action, "search_web")
-        self.assertEqual(result.plan.commands[0].payload["query"], "who is the prime minister of india")
+
+    def test_latest_ai_news_prefers_web_research(self) -> None:
+        engine = DecisionEngine(ai_parser=DummyAIParser(ai_success=True), memory_store=self.memory, app_registry=self.registry)
+        result = engine.decide(
+            raw_text="latest ai news",
+            parsed_plan=None,
+            context={"last_app": "", "time_of_day": "afternoon"},
+            memory=self.memory.snapshot(),
+        )
+
+        self.assertEqual(result.mode, "action")
+        self.assertEqual(result.plan.commands[0].action, "web_research")
+
+    def test_static_knowledge_uses_local_without_web_research(self) -> None:
+        engine = DecisionEngine(ai_parser=DummyAIParser(ai_success=False), memory_store=self.memory, app_registry=self.registry)
+        result = engine.decide(
+            raw_text="what is polymorphism",
+            parsed_plan=None,
+            context={"last_app": "", "time_of_day": "afternoon"},
+            memory=self.memory.snapshot(),
+        )
+
+        self.assertEqual(result.mode, "answer")
+        self.assertNotEqual(result.source, "decision.web_research")
+
+    def test_command_does_not_trigger_ai_or_web_research(self) -> None:
+        parser = DummyAIParser(ai_success=True)
+        engine = DecisionEngine(ai_parser=parser, memory_store=self.memory, app_registry=self.registry)
+        result = engine.decide(
+            raw_text="open spotify",
+            parsed_plan=None,
+            context={"last_app": "", "time_of_day": "afternoon"},
+            memory=self.memory.snapshot(),
+        )
+
+        self.assertEqual(result.mode, "action")
+        self.assertEqual(result.plan.commands[0].action, "open_app")
+        self.assertEqual(parser.last_ai_query, "")
+
+    def test_search_it_prefers_knowledge_context_over_action_context(self) -> None:
+        result = self.engine.decide(
+            raw_text="search it",
+            parsed_plan=None,
+            context={
+                "last_query": "spotify",
+                "last_knowledge_query": "what is polymorphism",
+                "last_action_query": "open spotify",
+                "time_of_day": "afternoon",
+            },
+            memory=self.memory.snapshot(),
+        )
+
+        self.assertEqual(result.mode, "action")
+        self.assertEqual(result.plan.commands[0].action, "search_web")
+        self.assertEqual(result.plan.commands[0].payload["query"], "what is polymorphism")
 
     def test_search_for_it_resolves_context_query(self) -> None:
         parsed_plan = CommandPlan(
@@ -469,7 +689,7 @@ class DecisionEngineTests(unittest.TestCase):
             memory=self.memory.snapshot(),
         )
         self.assertEqual(second.mode, "answer")
-        self.assertIn("what is polymorphism", self.engine.ai_parser.last_ai_query)
+        self.assertIn("polymorphism", second.response.lower())
 
         third = self.engine.decide(
             raw_text="give example",
@@ -522,6 +742,22 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertEqual(result.message, "I couldn't generate a reliable document. Do you want me to search instead?")
 
+    def test_executor_web_research_returns_summary_only(self) -> None:
+        executor = Executor(memory_store=self.memory)
+        fake_result = Mock(
+            success=True,
+            answer="Quantum computing uses quantum mechanics to process information in new ways.",
+            source_url="https://example.com/quantum",
+            title="Quantum computing",
+            article_text="full article text",
+        )
+
+        with patch("executor.research_web", return_value=fake_result):
+            result = executor.execute(ParsedCommand(action="web_research", payload={"query": "what is quantum computing"}))
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.message, fake_result.answer)
+
 
 class ContextEngineTests(unittest.TestCase):
     def test_time_of_day_uses_local_clock_buckets(self) -> None:
@@ -560,11 +796,25 @@ class ContextEngineTests(unittest.TestCase):
         context = ContextEngine(history_size=5)
         snapshot = context.update_context(command_text="what is polymorphism", last_action="answer_query")
         self.assertIn("last_query", snapshot)
+        self.assertIn("last_knowledge_query", snapshot)
+        self.assertIn("last_action_query", snapshot)
         self.assertIn("last_answer", snapshot)
         self.assertIn("pending_interaction", snapshot)
         self.assertIn("conversation_history", snapshot)
         self.assertIn("timestamp", snapshot)
         self.assertEqual(snapshot["last_query"], "what is polymorphism")
+        self.assertEqual(snapshot["last_knowledge_query"], "what is polymorphism")
+
+    def test_context_splits_knowledge_and_action_queries(self) -> None:
+        context = ContextEngine(history_size=5)
+        context.update_context(command_text="what is polymorphism", last_action="answer_query")
+        snapshot = context.update_context(
+            command_text="open spotify",
+            plan=CommandPlan(commands=[ParsedCommand(action="open_app", payload={"app": "spotify"})], raw_text="open spotify"),
+        )
+
+        self.assertEqual(snapshot["last_knowledge_query"], "what is polymorphism")
+        self.assertEqual(snapshot["last_action_query"], "open spotify")
 
     def test_pending_interaction_expires_after_timeout(self) -> None:
         context = ContextEngine(history_size=5)
@@ -600,6 +850,17 @@ class ContextEngineTests(unittest.TestCase):
             response_text="expanded explanation",
         )
         self.assertEqual(snapshot["last_query"], "what is polymorphism")
+
+    def test_web_research_action_preserves_last_knowledge_query(self) -> None:
+        context = ContextEngine(history_size=5)
+        context.update_context(command_text="what is a red blood cell", last_action="answer_query")
+        plan = CommandPlan(
+            commands=[ParsedCommand(action="web_research", payload={"query": "what is a red blood cell"}, source="decision")],
+            raw_text="what is a red blood cell",
+            source="decision",
+        )
+        snapshot = context.update_context(plan=plan)
+        self.assertEqual(snapshot["last_knowledge_query"], "what is a red blood cell")
 
 
 class AppRegistryTests(unittest.TestCase):
@@ -667,6 +928,39 @@ class AIParserTests(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertIn("ai_retry", joined_logs)
         self.assertIn("ai_final_failure", joined_logs)
+
+    def test_payload_validation_rejects_missing_role(self) -> None:
+        parser = AIParser(api_key="test-key", max_retries=0, timeout_seconds=1)
+        invalid_payload = {"contents": [{"parts": [{"text": "hello"}]}], "generationConfig": {"temperature": 0.2}}
+        self.assertEqual(parser._validate_request_payload(invalid_payload, request_kind="test"), "missing_role")
+
+
+class WebResearchTests(unittest.TestCase):
+    def test_web_research_cache_hit_skips_second_search(self) -> None:
+        from web_research import WebResearchEngine
+
+        engine = WebResearchEngine()
+        with patch.object(engine, "_search", return_value=[Mock(title="t", href="https://example.com", snippet="s")]) as search_mock, patch.object(
+            engine,
+            "_fetch_article_text",
+            return_value=("This is a long article sentence about current AI developments. " * 12).strip(),
+        ):
+            first = engine.research("latest ai news", ai_parser=None, include_attribution=False)
+            second = engine.research("latest ai news", ai_parser=None, include_attribution=False)
+
+        self.assertTrue(first.success)
+        self.assertTrue(second.success)
+        self.assertEqual(search_mock.call_count, 1)
+
+    def test_transport_error_timedelta_is_stringified_safely(self) -> None:
+        from datetime import timedelta
+        from web_research import WebResearchEngine
+
+        engine = WebResearchEngine()
+        class TimedeltaError(Exception):
+            pass
+        err = TimedeltaError(timedelta(seconds=2))
+        self.assertIn("2.00s", engine._safe_error_text(err))
 
 
 if __name__ == "__main__":

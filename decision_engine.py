@@ -10,12 +10,22 @@ from answer_memory import AnswerMemory
 from conversation_memory import get_last_topic, remember_answer
 from followup_utils import is_follow_up_query
 from intent_parser import CommandPlan, ParsedCommand, SUPPORTED_ACTIONS
-from answer_fallback import try_local_answer
+from answer_fallback import classify_query, try_local_answer
 from garbage_detector import detect_garbage_input
 from personality_engine import personality_engine
+from sanity_validator import validate_query_sanity
 from utils.logger import get_logger, log_event
 
 logger = get_logger("DecisionEngine")
+
+QUERY_TYPES = {
+    "command": "command",
+    "static_knowledge": "static_knowledge",
+    "dynamic_fact": "dynamic_fact",
+    "current_event": "current_event",
+    "reasoning": "reasoning",
+    "conversation": "conversation",
+}
 
 
 @dataclass
@@ -39,6 +49,7 @@ class PendingClarification:
 
 class DecisionEngine:
     CLARIFICATION_TIMEOUT_SECONDS = 20
+    SESSION_CACHE_TTL = 120
     HIGH_CONFIDENCE_THRESHOLD = 0.7
     MEDIUM_CONFIDENCE_THRESHOLD = 0.4
     SEARCH_PROMPT = "I'm having trouble getting a reliable answer. Do you want me to search it?"
@@ -67,6 +78,9 @@ class DecisionEngine:
         r"^what(?:'s| is) the difference between\b",
         r"^compare\b",
         r"^define\b",
+        r"^latest\b",
+        r"^news\b",
+        r"^what(?:'s| is) happening\b",
     )
     FOLLOW_UP_PATTERNS = (
         r"^give example\b",
@@ -91,6 +105,21 @@ class DecisionEngine:
         "good afternoon": "Good afternoon.",
         "good evening": "Good evening.",
     }
+    CONVERSATIONAL_QUERY_PATTERNS = (
+        "how are you",
+        "how r u",
+        "what's up",
+        "whats up",
+        "hello",
+        "hi",
+        "hey",
+        "thanks",
+        "thank you",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "nice",
+    )
     TOXIC_PATTERNS = (
         r"\bfuck you\b",
         r"\bscrew you\b",
@@ -102,6 +131,7 @@ class DecisionEngine:
     NO_WORDS = {"no", "nope", "cancel", "stop", "don't", "do not", "not now"}
     WEB_SITES = {"google", "youtube", "gmail", "github", "reddit"}
     FOLLOW_UP_RESPONSE_HINTS = ("yes", "no", "answer", "search", "tell me", "explain", "look it up")
+    WEB_RESEARCH_QUERY_TYPES = {"dynamic_fact", "current_event", "reasoning"}
 
     def __init__(self, ai_parser: Any, memory_store: Any, app_registry: Any | None = None) -> None:
         self.ai_parser = ai_parser
@@ -111,6 +141,7 @@ class DecisionEngine:
         self._pending_clarification: PendingClarification | None = None
         self._last_topic = ""
         self._last_query = ""
+        self._session_cache: dict[str, dict[str, Any]] = {}
 
     def decide(
         self,
@@ -131,7 +162,7 @@ class DecisionEngine:
             if resolved is not None:
                 return self._finalize(resolved, cleaned_text)
 
-        context_last_query = self._normalize(str(context.get("last_query", "") or ""))
+        context_last_query = self._normalize(str(context.get("last_knowledge_query") or context.get("last_query", "") or ""))
         effective_last_query = self._latest_valid_last_query(context_last_query)
         document_plan = self._parse_document_generation_intent(normalized)
         if document_plan is not None:
@@ -595,13 +626,21 @@ class DecisionEngine:
     def _is_answer_query(self, normalized: str, parsed_plan: CommandPlan | None) -> bool:
         if self._is_follow_up(normalized):
             return False
+        if self._looks_like_command(normalized):
+            return False
         if parsed_plan:
             actions = {command.action for command in parsed_plan.commands}
             if actions & {"current_time", "current_date", "calendar_today", "greeting", "shutdown", "restart"}:
                 return False
             if actions == {"search_web"} and not self._looks_like_search_request(normalized):
                 return any(re.search(pattern, normalized) for pattern in self.ANSWER_PATTERNS)
-        return any(re.search(pattern, normalized) for pattern in self.ANSWER_PATTERNS)
+        query_type = self._classify_query_type(normalized, parsed_plan=None)
+        return any(re.search(pattern, normalized) for pattern in self.ANSWER_PATTERNS) or query_type in {
+            QUERY_TYPES["static_knowledge"],
+            QUERY_TYPES["dynamic_fact"],
+            QUERY_TYPES["current_event"],
+            QUERY_TYPES["reasoning"],
+        }
 
     def _is_follow_up(self, normalized: str) -> bool:
         return is_follow_up_query(normalized) or any(re.search(pattern, normalized) for pattern in self.FOLLOW_UP_PATTERNS)
@@ -938,6 +977,10 @@ class DecisionEngine:
                 elif match_type == "fuzzy":
                     score -= 0.1
                     notes.append("fuzzy_registry_match")
+            elif first.action == "open_app" and self._looks_non_application_phrase(app):
+                score -= 0.4
+                notes.append("semantic_app_confidence_downgrade")
+                log_event(logger, "semantic_app_confidence_downgrade", source="decision", success=True, app=app)
         if first.action == "search_web":
             if self._looks_like_search_request(normalized) or normalized.startswith(("open youtube", "open google", "open github", "open reddit", "open gmail")):
                 score += 0.2
@@ -948,6 +991,12 @@ class DecisionEngine:
         return max(0.0, min(score, 0.99)), notes
 
     def _clarification_for_medium_confidence(self, plan: CommandPlan) -> str:
+        if plan.commands:
+            command = plan.commands[0]
+            if command.action == "open_app" and not command.payload.get("path"):
+                app_name = str(command.payload.get("app", "")).strip()
+                if self._looks_non_application_phrase(app_name):
+                    return "Did you want me to search that instead?"
         return f"Did you mean to {self._describe_action(plan)}?"
 
     def _describe_action(self, plan: CommandPlan) -> str:
@@ -1070,11 +1119,21 @@ class DecisionEngine:
         normalized_query = self._normalize(query)
         if normalized_query not in {"it", "that", "this"}:
             return normalized_query
-        context_query = self._normalize(str(context.get("last_query", "") or ""))
+        context_query = self._normalize(str(context.get("last_knowledge_query") or context.get("last_query", "") or ""))
         if not context_query:
             return normalized_query
         log_event(logger, "context_query_resolved", source="decision", success=True, original=normalized_query, resolved=context_query)
         return context_query
+
+    def _looks_non_application_phrase(self, value: str) -> bool:
+        tokens = [token for token in re.split(r"\s+", (value or "").strip().lower()) if token]
+        if len(tokens) < 2:
+            return False
+        known_app_terms = {"chrome", "spotify", "vscode", "code", "edge", "brave", "youtube", "gmail", "github", "notepad", "calculator"}
+        if any(token in known_app_terms for token in tokens):
+            return False
+        uncommon_markers = {"quantum", "blockchain", "polymorphism", "mixtape", "concept", "theory", "history", "news"}
+        return len(tokens) >= 3 or any(token in uncommon_markers for token in tokens)
 
     def _should_reroute_app_to_search(self, entity: str) -> bool:
         cleaned = entity.strip().lower()
@@ -1238,60 +1297,120 @@ class DecisionEngine:
     ) -> DecisionResult:
         normalized_query = self._normalize(answer_query)
         follow_up_request = self._is_follow_up(self._normalize(raw_text))
+        query_type = self._classify_query_type(normalized_query, parsed_plan=None)
+        is_dynamic = query_type in {QUERY_TYPES["dynamic_fact"], QUERY_TYPES["current_event"]}
+        is_reasoning = query_type == QUERY_TYPES["reasoning"]
+        is_static = query_type == QUERY_TYPES["static_knowledge"]
+        sanity_result = validate_query_sanity(answer_query)
+        if not sanity_result.is_valid:
+            log_event(
+                logger,
+                "sanity_validation_failed",
+                source="decision.answer",
+                success=False,
+                query=raw_text,
+                reason=sanity_result.reason,
+            )
+            log_event(
+                logger,
+                "sanity_confidence_downgraded",
+                source="decision.answer",
+                success=True,
+                query=raw_text,
+                factor=sanity_result.confidence_factor,
+            )
+            self._update_last_query(answer_query)
+            return DecisionResult(
+                mode="answer",
+                source="decision.sanity_guard",
+                response=sanity_result.clarification or "That question looks inconsistent. Can you rephrase it?",
+                notes=notes + ["sanity_validation_failed", "confidence:0.35", "confidence_low"],
+            )
         if not follow_up_request and (self._should_update_last_query(normalized_query) or self._is_forced_question_query(normalized_query)):
             self._update_last_query(answer_query)
-        if not follow_up_request and normalized_query not in {"yes", "no", "it"}:
-            cached_answer = self.answer_memory.retrieve(answer_query)
+        cached_session_response = self._get_session_cache(answer_query)
+        if cached_session_response:
+            log_event(logger, "session_cache_hit", source="decision.session_cache", success=True, query=answer_query)
+            return DecisionResult(mode="answer", source="decision.session_cache", response=cached_session_response, notes=notes + ["session_cache_hit"])
+
+        if not follow_up_request and normalized_query not in {"yes", "no", "it"} and not is_dynamic:
+            cached_answer = self.answer_memory.retrieve(answer_query, allow_dynamic=False)
             if cached_answer:
                 topic = self._topic_from_context(memory) or self._normalize(answer_query)
                 self._remember_answer(raw_text, cached_answer, topic)
                 if not follow_up_request:
                     self._update_last_query(answer_query)
                 log_event(logger, "memory_hit", source="decision.answer_memory", success=True, query=raw_text)
+                self._store_session_cache(answer_query, cached_answer)
                 return DecisionResult(mode="answer", source="decision.memory", response=cached_answer, notes=notes + ["memory_hit"])
             log_event(logger, "memory_miss", source="decision.answer_memory", success=False, query=raw_text)
 
+        local_result: dict[str, Any] = {"success": False, "error": "local_skipped"}
+        if is_static or is_reasoning or follow_up_request:
             local_result = try_local_answer(answer_query)
             if local_result.get("success"):
                 text = str(local_result.get("text", "")).strip()
                 local_confidence = float(local_result.get("confidence", 0.6) or 0.6)
                 local_source = str(local_result.get("source", "local_match") or "local_match").strip() or "local_match"
-                topic = self._topic_from_context(memory) or self._normalize(answer_query)
-                self._remember_answer(raw_text, text, topic)
-                if not follow_up_request:
-                    self._update_last_query(answer_query)
-                if local_source != "local_generated" and self.answer_memory.store(answer_query, text, confidence=local_confidence):
-                    log_event(
-                        logger,
-                        "memory_store",
-                        source="decision.answer_memory",
-                        success=True,
-                        query=raw_text,
-                        confidence=local_confidence,
-                        answer_source="local",
-                    )
-                if local_source == "local_generated":
-                    log_event(logger, "local_generated", source="decision.answer", success=True, query=raw_text, confidence=local_confidence)
+                if self._is_weak_local_answer(answer_query, text, local_confidence):
+                    log_event(logger, "local_low_confidence", source="decision.answer", success=False, query=raw_text, confidence=local_confidence)
+                else:
+                    topic = self._topic_from_context(memory) or self._normalize(answer_query)
+                    self._remember_answer(raw_text, text, topic)
+                    if not follow_up_request:
+                        self._update_last_query(answer_query)
+                    if local_source != "local_generated" and self.answer_memory.store(answer_query, text, confidence=local_confidence, source="verified_local"):
+                        log_event(
+                            logger,
+                            "memory_store",
+                            source="decision.answer_memory",
+                            success=True,
+                            query=raw_text,
+                            confidence=local_confidence,
+                            answer_source="verified_local",
+                        )
+                    log_event(logger, "source_reliability_applied", source="decision.answer", success=True, query=raw_text, source_rank="verified_local")
                     log_event(logger, "local_success", source="decision.answer", success=True, query=raw_text)
-                    return DecisionResult(mode="answer", source="decision.local_generated", response=text, notes=notes + ["local_generated"])
-                log_event(logger, "local_match", source="decision.answer", success=True, query=raw_text, confidence=local_confidence)
-                log_event(logger, "local_success", source="decision.answer", success=True, query=raw_text)
-                return DecisionResult(mode="answer", source="decision.local", response=text, notes=notes + ["local_match"])
-
+                    self._store_session_cache(answer_query, text)
+                    source_name = "decision.local_generated" if local_source == "local_generated" else "decision.local"
+                    source_note = "local_generated" if local_source == "local_generated" else "local_match"
+                    return DecisionResult(mode="answer", source=source_name, response=text, notes=notes + [source_note])
             local_error = str(local_result.get("error", "unknown")).strip() or "unknown"
             log_event(logger, "local_failure", source="decision.answer", success=False, query=raw_text, reason=local_error)
+
+        if not follow_up_request and self._should_attempt_web_research(answer_query, query_type):
+            query = self._normalize(answer_query)
+            if query and not follow_up_request:
+                self._last_query = query
+                logger.info("last_query updated -> %s", self._last_query)
+            plan = CommandPlan(
+                commands=[
+                    ParsedCommand(
+                        action="web_research",
+                        payload={"query": answer_query, "query_type": query_type, "include_attribution": True},
+                        source="decision",
+                        priority=80,
+                    )
+                ],
+                raw_text=raw_text,
+                source="decision.web_research",
+            )
+            log_event(logger, "web_research_selected", source="decision.answer", success=True, query=raw_text, query_type=query_type)
+            return DecisionResult(mode="action", source="decision.web_research", plan=plan, notes=notes + ["web_research"])
 
         ai_result = self.ai_parser.try_ai_answer(answer_query, context=context, memory=memory)
         if ai_result.get("success"):
             text = str(ai_result.get("text", "")).strip()
-            ai_confidence = 0.9
+            ai_confidence = 0.8
             topic = self._topic_from_context(memory) or self._normalize(answer_query)
             self._remember_answer(raw_text, text, topic)
             if not follow_up_request:
                 self._update_last_query(answer_query)
-            if self.answer_memory.store(answer_query, text, confidence=ai_confidence):
+            if self.answer_memory.store(answer_query, text, confidence=ai_confidence, source="ai"):
                 log_event(logger, "memory_store", source="decision.answer_memory", success=True, query=raw_text, confidence=ai_confidence, answer_source="ai")
+            log_event(logger, "source_reliability_applied", source="decision.answer", success=True, query=raw_text, source_rank="ai")
             log_event(logger, "ai_success", source="decision.answer", success=True, query=raw_text)
+            self._store_session_cache(answer_query, text)
             return DecisionResult(mode="answer", source="decision.ai", response=text, notes=notes + ["ai_success"])
 
         ai_error = str(ai_result.get("error", "unknown")).strip() or "unknown"
@@ -1302,6 +1421,13 @@ class DecisionEngine:
         if query and not follow_up_request:
             self._last_query = query
             logger.info("last_query updated -> %s", self._last_query)
+            log_event(
+                logger,
+                "knowledge_context_preserved_after_failure",
+                source="decision.answer",
+                success=True,
+                query=query,
+            )
         self._set_pending_clarification(
             kind="answer_vs_search",
             prompt=self.SEARCH_PROMPT,
@@ -1310,6 +1436,160 @@ class DecisionEngine:
             payload={"query": query, "original_query": raw_text, "options": ["answer", "search"], "timestamp": time.time()},
         )
         return DecisionResult(mode="answer", source="decision.fallback_prompt", response=self.SEARCH_PROMPT, notes=notes + ["fallback_triggered"])
+
+    def _should_attempt_web_research(self, query: str, query_type: str | None = None) -> bool:
+        resolved_type = query_type or self._classify_query_type(query, parsed_plan=None)
+        return resolved_type in self.WEB_RESEARCH_QUERY_TYPES
+
+    def _get_session_cache(self, query: str) -> str:
+        key = self._normalize(query)
+        if not key:
+            return ""
+        cached = self._session_cache.get(key)
+        if not cached:
+            return ""
+        if time.time() - float(cached.get("timestamp", 0.0) or 0.0) > self.SESSION_CACHE_TTL:
+            self._session_cache.pop(key, None)
+            return ""
+        return str(cached.get("response", "") or "").strip()
+
+    def _store_session_cache(self, query: str, response: str) -> None:
+        key = self._normalize(query)
+        clean_response = str(response or "").strip()
+        if not key or not clean_response:
+            return
+        self._session_cache[key] = {"response": clean_response, "timestamp": time.time()}
+        log_event(logger, "session_cache_store", source="decision.session_cache", success=True, query=query)
+
+    def _is_weak_local_answer(self, query: str, answer: str, confidence: float) -> bool:
+        if confidence < self.HIGH_CONFIDENCE_THRESHOLD:
+            return True
+        query_type = self._classify_query_type(query, parsed_plan=None)
+        if query_type not in {QUERY_TYPES["reasoning"], QUERY_TYPES["dynamic_fact"], QUERY_TYPES["current_event"]}:
+            return False
+        normalized_answer = self._normalize(answer)
+        weak_phrases = (
+            "is a concept that refers to",
+            "is an important concept",
+            "core idea, common use cases, and trade-offs",
+        )
+        return any(phrase in normalized_answer for phrase in weak_phrases)
+
+    def _query_type(self, query: str) -> str:
+        normalized = self._normalize(query)
+        if not normalized:
+            return "unknown"
+        if any(marker in normalized for marker in ("latest", "breaking news", "today's news", "todays news", "news")):
+            return QUERY_TYPES["current_event"]
+        if any(marker in normalized for marker in ("happening in", "current events", "yesterday", "today", "recent")):
+            return QUERY_TYPES["current_event"]
+        if any(
+            marker in normalized
+            for marker in (
+                "chief minister",
+                "prime minister",
+                "president",
+                "leader of opposition",
+                "who won",
+                "ranking",
+                "stock price",
+                "share price",
+                "election",
+                "score",
+                "result",
+            )
+        ):
+            return QUERY_TYPES["dynamic_fact"]
+        return classify_query(normalized)
+
+    def _classify_query_type(self, query: str, parsed_plan: CommandPlan | None) -> str:
+        normalized = self._normalize(query)
+        if not normalized:
+            return QUERY_TYPES["conversation"]
+        if parsed_plan and parsed_plan.commands:
+            log_event(logger, "query_classified", source="decision", success=True, query=normalized, query_type=QUERY_TYPES["command"])
+            return QUERY_TYPES["command"]
+        if self._looks_like_command(normalized):
+            log_event(logger, "query_classified", source="decision", success=True, query=normalized, query_type=QUERY_TYPES["command"])
+            return QUERY_TYPES["command"]
+        if self._is_conversational_query_text(normalized) or normalized in self.YES_WORDS or normalized in self.NO_WORDS:
+            log_event(logger, "query_classified", source="decision", success=True, query=normalized, query_type=QUERY_TYPES["conversation"])
+            return QUERY_TYPES["conversation"]
+
+        legacy_type = self._query_type(normalized)
+        if legacy_type == QUERY_TYPES["dynamic_fact"]:
+            query_type = QUERY_TYPES["dynamic_fact"]
+        elif legacy_type == QUERY_TYPES["current_event"]:
+            query_type = QUERY_TYPES["current_event"]
+        elif self._is_dynamic_fact_query(normalized):
+            query_type = QUERY_TYPES["dynamic_fact"]
+        elif legacy_type in {"comparison", "algorithmic"} or self._is_reasoning_query(normalized):
+            query_type = QUERY_TYPES["reasoning"]
+        elif legacy_type in {"conceptual", "definition"} or self._is_static_knowledge_query(normalized):
+            query_type = QUERY_TYPES["static_knowledge"]
+        elif legacy_type == "factual":
+            query_type = QUERY_TYPES["dynamic_fact"] if self._is_dynamic_fact_query(normalized) else QUERY_TYPES["static_knowledge"]
+        elif self._is_follow_up(normalized):
+            query_type = QUERY_TYPES["reasoning"]
+        elif self._looks_like_question(normalized):
+            query_type = QUERY_TYPES["static_knowledge"]
+        else:
+            query_type = QUERY_TYPES["conversation"]
+        log_event(logger, "query_classified", source="decision", success=True, query=normalized, query_type=query_type)
+        log_event(logger, "classification_refined", source="decision", success=True, query=normalized, query_type=query_type)
+        return query_type
+
+    def _is_conversational_query_text(self, normalized: str) -> bool:
+        return any(normalized == pattern or normalized.startswith(pattern) for pattern in self.CONVERSATIONAL_QUERY_PATTERNS)
+
+    def _is_dynamic_fact_query(self, normalized: str) -> bool:
+        return any(
+            marker in normalized
+            for marker in (
+                "current ",
+                "latest",
+                "today",
+                "yesterday",
+                "news",
+                "stock price",
+                "share price",
+                "ranking",
+                "who won",
+                "chief minister",
+                "prime minister",
+                "president",
+                "leader of opposition",
+                "result",
+                "score",
+            )
+        )
+
+    def _is_reasoning_query(self, normalized: str) -> bool:
+        if any(marker in normalized for marker in ("difference between", "compare ", " vs ", " versus ", "trade-off", "tradeoff")):
+            return True
+        if normalized.startswith(("why ", "how does ", "how do ", "how can ")):
+            return True
+        return any(
+            marker in normalized
+            for marker in (
+                "internals",
+                "architecture",
+                "design",
+                "efficient",
+                "faster",
+                "slower",
+                "complexity",
+                "causes",
+                "reason behind",
+            )
+        )
+
+    def _is_static_knowledge_query(self, normalized: str) -> bool:
+        if self._is_dynamic_fact_query(normalized) or self._is_reasoning_query(normalized):
+            return False
+        if normalized.startswith(("what is ", "what are ", "define ", "who is ", "explain ")):
+            return True
+        return False
 
     def _remember_answer(self, raw_text: str, response: str, topic: str) -> None:
         clean_topic = (topic or "").strip()
