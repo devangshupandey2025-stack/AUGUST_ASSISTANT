@@ -66,12 +66,38 @@ def try_local_answer(query: str) -> dict[str, str | bool | float]:
 
     generated = _generate_lightweight_answer(normalized, query_type)
     if generated:
-        return _success(generated, 0.72, source="local_generated", kind=query_type)
+        # Confidence intentionally set below LOCAL_CONFIDENCE_THRESHOLD (0.7)
+        # so generic filler answers are rejected and fall through to web research.
+        return _success(generated, 0.45, source="local_generated", kind=query_type)
 
     return {"success": False, "text": "", "error": "no_local_match", "confidence": 0.0, "source": "local_failure", "kind": query_type}
 
 
 def _factual_answer(normalized: str) -> str:
+    if any(
+        phrase in normalized
+        for phrase in (
+            "chief minister of west bengal",
+            "cm of west bengal",
+            "chief minister of westbengal",
+            "cm of westbengal",
+        )
+    ):
+        return _with_template("the Chief Minister of West Bengal is Mamata Banerjee.")
+
+    if any(
+        phrase in normalized
+        for phrase in (
+            "who is suvendu adhikari",
+            "who is suvendhu adhikari",
+            "suvendu adhikari",
+            "suvendhu adhikari",
+        )
+    ):
+        return _with_template(
+            "Suvendu Adhikari is a BJP leader and the Leader of the Opposition in the West Bengal Legislative Assembly."
+        )
+
     if "prime minister of india" in normalized or normalized in {"who is pm of india", "who is the pm of india", "current pm of india"}:
         return _with_template("the Prime Minister of India is Narendra Modi.")
 
@@ -118,15 +144,10 @@ def _definition_answer(normalized: str, query_type: str) -> str:
     if "difference between array and linked list" in normalized:
         return _with_template("arrays use contiguous memory and fast index access, while linked lists use node pointers and make insertions and deletions easier at known positions.")
 
-    if normalized.startswith("define "):
-        topic = normalized.removeprefix("define ").strip(" ?.")
-        if topic:
-            return _with_template(f"{topic} is a concept that refers to a core idea used to explain how something works.")
-
-    if normalized.startswith(("what is ", "explain ")):
-        topic = normalized.removeprefix("what is ").removeprefix("explain ").strip(" ?.")
-        if topic and len(topic.split()) <= 4:
-            return _with_template(f"{topic} is a concept that refers to how a specific idea, process, or system is understood and applied.")
+    # NOTE: Generic catch-all definitions removed.
+    # Previously these produced hallucinated filler like
+    # "X is a concept that refers to ..." at confidence 0.78.
+    # Unknown terms now fall through to web research.
 
     return ""
 

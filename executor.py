@@ -14,11 +14,13 @@ from AppOpener import open as open_app_fallback
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 
+from answer_memory import AnswerMemory
 from document_generator import generate_document
 from intent_parser import CommandPlan, ParsedCommand
 from modules.calendar_module import fetch_todays_events
 from system_intents import formatted_date, formatted_time
 from utils.logger import get_logger, log_event
+from web_research import FAILURE_MESSAGE, research as research_web
 
 logger = get_logger("Executor")
 
@@ -57,6 +59,7 @@ class Executor:
             "current_date": self._current_date,
             "greeting": self._greeting,
             "generate_document": self._generate_document,
+            "web_research": self._web_research,
         }
 
     def execute_plan(self, plan: CommandPlan) -> ExecutionResult:
@@ -213,6 +216,37 @@ class Executor:
         )
         return ExecutionResult(result.success, result.message)
 
+    def _web_research(self, command: ParsedCommand) -> ExecutionResult:
+        query = str(command.payload.get("query", "")).strip()
+        if not query:
+            return ExecutionResult(False, FAILURE_MESSAGE)
+        result = research_web(
+            query,
+            ai_parser=self.ai_parser,
+            include_attribution=bool(command.payload.get("include_attribution", True)),
+        )
+        if not result.success:
+            if command.payload.get("refresh_dynamic"):
+                log_event(logger, "dynamic_fact_refresh_failed", source="executor.web_research", success=False, query=query)
+            return ExecutionResult(False, result.answer or FAILURE_MESSAGE)
+        self._save_research_snapshot(query, result.source_url, result.title, result.article_text)
+
+        # --- Confidence-gated memory storage ---
+        research_confidence = getattr(result, "confidence", 0.88) or 0.88
+        if self.memory_store is not None:
+            from knowledge_governor import KnowledgeGovernor
+            governor = KnowledgeGovernor()
+            if governor.should_store_research(query, result.answer, research_confidence):
+                AnswerMemory(memory_store=self.memory_store).store(query, result.answer, confidence=min(research_confidence, 0.88), source="verified_web")
+                log_event(logger, "research_memory_stored", source="executor.web_research", success=True, query=query, confidence=round(research_confidence, 3))
+            else:
+                log_event(logger, "research_memory_blocked", source="executor.web_research", success=False, query=query, confidence=round(research_confidence, 3))
+
+        log_event(logger, "source_reliability_applied", source="executor.web_research", success=True, query=query, source_rank="verified_web")
+        if command.payload.get("refresh_dynamic"):
+            log_event(logger, "dynamic_fact_refresh_success", source="executor.web_research", success=True, query=query, refresh_source="web")
+        return ExecutionResult(True, result.answer)
+
     def _current_time(self, command: ParsedCommand) -> ExecutionResult:
         del command
         return ExecutionResult(True, f"The time right now is {formatted_time()}.")
@@ -290,6 +324,21 @@ class Executor:
         if query:
             return f"https://www.google.com/search?q={quote_plus(query)}"
         return site_homepages.get(normalized_site, "https://www.google.com")
+
+    def _save_research_snapshot(self, query: str, source_url: str, title: str, article_text: str) -> None:
+        if not self.memory_store or not hasattr(self.memory_store, "_data") or not hasattr(self.memory_store, "save"):
+            return
+        try:
+            data = self.memory_store._data
+            data["last_web_research"] = {
+                "query": query,
+                "source_url": source_url,
+                "title": title,
+                "article_text": article_text[:8000],
+            }
+            self.memory_store.save()
+        except Exception as exc:
+            logger.debug("Failed to save web research snapshot: %s", exc)
 
     def _reroute_app_like_web_command(self, app_name: str) -> ParsedCommand | None:
         cleaned = (app_name or "").strip().lower()

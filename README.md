@@ -2,7 +2,7 @@
 
 ## JARVIS Voice Assistant (Python, Windows)
 
-A modular, voice-first desktop assistant for **Windows** that listens for a wake phrase, understands spoken commands, and executes actions like opening apps, web search, reminders, volume control, and calendar summaries.
+A modular, voice-first desktop assistant for **Windows** that listens for a wake phrase, understands spoken commands, and executes actions like opening apps, web search, reminders, volume control, calendar summaries, document generation, and researched answers.
 
 ## What it does
 
@@ -12,6 +12,13 @@ A modular, voice-first desktop assistant for **Windows** that listens for a wake
   2. Rule-based intent parser
   3. Gemini fallback parser (structured action JSON)
   4. Decision engine that validates/corrects plans, resolves context-aware commands (like "open it"/"close it"), and routes informational questions to answer mode.
+- Research and answer intelligence:
+  - Query understanding with intent classification and entity extraction
+  - Query normalization for STT noise and canonical names
+  - Search query synthesis with topic-aware domain preferences
+  - Result filtering and ranking before article fetches
+  - Retrieval confidence scoring with entity, semantic, and domain signals
+  - Web research caching, retry handling, trusted-domain prioritization, and anti-hallucination safeguards
 - Version 4.3 conversation management:
   - Unified context model (`last_query`, `last_answer`, `last_action`, `last_app`, `pending_interaction`, `conversation_history`, `timestamp`)
   - Pending interaction lock for multi-turn clarification/answer-vs-search flows
@@ -69,6 +76,8 @@ A modular, voice-first desktop assistant for **Windows** that listens for a wake
   - Web/search actions (Google/YouTube/Gmail/GitHub/Reddit)
   - Volume controls (up/down/mute/unmute)
   - Calendar summary for today
+  - Web research answers for knowledge, comparison, reasoning, and dynamic-fact queries
+  - Document generation from prompts like "make notes on polymorphism"
 - Reminder creation (`in X minutes/hours/seconds`)
 - System restart/shutdown (with confirmation)
 - Informational Q&A responses for prompts like "what is..." and "difference between..."
@@ -87,6 +96,8 @@ A modular, voice-first desktop assistant for **Windows** that listens for a wake
 - Python 3.x
 - Windows APIs and utilities (`pycaw`, `AppOpener`, `taskkill`, `shutdown`)
 - Google Calendar API (`google-api-python-client`, OAuth credentials)
+- Web research stack (`duckduckgo_search`, `requests`, `beautifulsoup4`, `newspaper`, `readability`)
+- Document generation (`python-docx`)
 - Gemini API (optional parser fallback)
 
 ## Project structure
@@ -101,8 +112,15 @@ ai_parser.py           # Gemini-powered parser fallback
 answer_fallback.py     # Local knowledge engine with query classification and templates
 answer_memory.py       # Safe answer memory store/retrieval with similarity scoring
 personality_engine.py  # Personality profile, response variation, and humanized phrasing
+query_understanding.py # Intent classification and entity extraction for research
+query_normalizer.py    # Query cleanup and canonical name normalization
+search_synthesizer.py  # Search query templates and preferred domain selection
+result_filter.py       # Relevance filtering and domain-aware ranking
+retrieval_confidence.py # Confidence scoring for research results
+web_research.py       # Live web research with caching and fallback handling
 decision_engine.py     # Plan correction/validation + answer-vs-action routing
 context_engine.py      # Session context state (recent commands, last app/action, time slot)
+document_generator.py  # Generates structured Word documents from researched topics
 executor.py            # Executes parsed actions
 scheduler.py           # Reminder polling + proactive suggestions
 memory.py              # Persistent memory and pattern learning
@@ -175,6 +193,8 @@ You should see: `Assistant V4 is online. Press Ctrl+C to exit.`
 - “what time is it”
 - “what date is it”
 - “what is my schedule”
+- “make notes on polymorphism”
+- “search it”
 - “remind me to drink water in 20 minutes”
 - “restart” (asks for confirmation)
 

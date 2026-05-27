@@ -159,12 +159,12 @@ class AIParser:
 
         prompt = self._build_answer_prompt(user_input, context, memory)
         payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.2,
             },
         }
-        payload_error = self._validate_request_payload(payload)
+        payload_error = self._validate_request_payload(payload, request_kind="ai_answer")
         if payload_error:
             return {"success": False, "text": "", "error": "invalid_payload"}
 
@@ -219,6 +219,74 @@ class AIParser:
         log_event(logger, "ai_final_failure", source="ai", success=False, attempt=total_attempts, reason=last_error, backoff_seconds=0.0)
         return {"success": False, "text": "", "error": last_error}
 
+    def summarize_web_content(
+        self,
+        text: str,
+        query: str = "",
+        source_url: str = "",
+        title: str = "",
+    ) -> dict[str, str | bool]:
+        clean_text = " ".join((text or "").split())
+        if not clean_text:
+            return {"success": False, "text": "", "error": "empty_text"}
+        if not self.api_key:
+            return {"success": False, "text": "", "error": "missing_api_key"}
+
+        excerpt = clean_text[:9000]
+        prompt = (
+            "Summarize the extracted web article content in 3-5 concise sentences. "
+            "Keep factual accuracy, remove redundancy, and keep the language simple for voice output. "
+            "Do not include markdown or bullet points.\n\n"
+            f"Query: {query or 'N/A'}\n"
+            f"Title: {title or 'N/A'}\n"
+            f"Source URL: {source_url or 'N/A'}\n"
+            f"Extracted content:\n{excerpt}"
+        )
+        payload = {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.1},
+        }
+        payload_error = self._validate_request_payload(payload, request_kind="web_summary")
+        if payload_error:
+            return {"success": False, "text": "", "error": "invalid_payload"}
+
+        last_error = "unknown"
+        total_attempts = self.ANSWER_RETRY_LIMIT + 1
+        for attempt in range(1, total_attempts + 1):
+            try:
+                response = requests.post(
+                    self.endpoint_template.format(model=self.model),
+                    json=payload,
+                    timeout=self.timeout_seconds,
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": self.api_key,
+                    },
+                )
+                response.raise_for_status()
+                result = response.json()
+                summary = " ".join(self._extract_candidate_text(result).split())
+                if not summary:
+                    return {"success": False, "text": "", "error": "invalid_payload"}
+                return {"success": True, "text": summary, "error": ""}
+            except requests.Timeout:
+                last_error = "timeout"
+            except requests.HTTPError as exc:
+                status = exc.response.status_code if exc.response is not None else "unknown"
+                last_error = f"http_{status}"
+            except (json.JSONDecodeError, AIParserError, ValueError, TypeError):
+                return {"success": False, "text": "", "error": "invalid_payload"}
+            except requests.RequestException as exc:
+                last_error = str(exc) or "request_error"
+            except Exception as exc:
+                last_error = str(exc) or "unknown"
+
+            if attempt <= self.ANSWER_RETRY_LIMIT and self._is_retryable_answer_error(last_error):
+                time.sleep(self._answer_backoff_seconds(attempt))
+                continue
+            break
+        return {"success": False, "text": "", "error": last_error}
+
     def answer_with_fallback(
         self,
         user_input: str,
@@ -242,11 +310,14 @@ class AIParser:
 
         prompt = self._build_answer_prompt(user_input, context, memory)
         payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": 0.2,
             },
         }
+        payload_error = self._validate_request_payload(payload, request_kind="answer_with_fallback")
+        if payload_error:
+            return self._offline_answer_result(user_input, context, memory, error="invalid_payload")
 
         last_error: str | None = None
         total_attempts = self.max_retries + 1
@@ -322,7 +393,7 @@ class AIParser:
     def _build_request_payload(self, user_input: str, context: dict[str, Any]) -> dict[str, Any]:
         prompt = self._build_prompt(user_input, context)
         return {
-            "contents": [{"parts": [{"text": prompt}]}],
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
                 "responseMimeType": "application/json",
                 "temperature": 0,
@@ -356,19 +427,29 @@ User question:
 {user_input}
 """.strip()
 
-    def _validate_request_payload(self, payload: dict[str, Any]) -> str | None:
+    def _validate_request_payload(self, payload: dict[str, Any], request_kind: str = "generic") -> str | None:
         if not isinstance(payload, dict):
+            log_event(logger, "payload_validation_failed", source="ai", success=False, request_kind=request_kind, reason="payload_not_object")
             return "payload_not_object"
         if "contents" not in payload or not isinstance(payload["contents"], list) or not payload["contents"]:
+            log_event(logger, "payload_validation_failed", source="ai", success=False, request_kind=request_kind, reason="missing_contents")
             return "missing_contents"
         first = payload["contents"][0]
         if not isinstance(first, dict) or "parts" not in first:
+            log_event(logger, "payload_validation_failed", source="ai", success=False, request_kind=request_kind, reason="missing_parts")
             return "missing_parts"
+        role = str(first.get("role", "")).strip().lower()
+        if role not in {"user", "model"}:
+            log_event(logger, "payload_validation_failed", source="ai", success=False, request_kind=request_kind, reason="missing_role")
+            return "missing_role"
         parts = first["parts"]
-        if not isinstance(parts, list) or not parts or "text" not in parts[0]:
+        if not isinstance(parts, list) or not parts or not isinstance(parts[0], dict) or "text" not in parts[0]:
+            log_event(logger, "payload_validation_failed", source="ai", success=False, request_kind=request_kind, reason="missing_text")
             return "missing_text"
         if not str(parts[0]["text"]).strip():
+            log_event(logger, "payload_validation_failed", source="ai", success=False, request_kind=request_kind, reason="empty_prompt")
             return "empty_prompt"
+        log_event(logger, "payload_validation_success", source="ai", success=True, request_kind=request_kind)
         return None
 
     def _build_prompt(self, user_input: str, context: dict[str, Any]) -> str:

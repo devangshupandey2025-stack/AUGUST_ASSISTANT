@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import re
 from contextlib import nullcontext
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
+
+from knowledge_governor import KnowledgeGovernor
+from utils.logger import get_logger, log_event
+
+logger = get_logger("AnswerMemory")
 
 
 class AnswerMemory:
@@ -34,58 +39,115 @@ class AnswerMemory:
         self.expiry_days = int(expiry_days)
         self.similarity_threshold = float(similarity_threshold)
         self.min_confidence = float(min_confidence)
+        self.governor = KnowledgeGovernor()
+        self.last_rejection_reason = ""
 
-    def retrieve(self, question: str) -> str | None:
+    def retrieve(self, question: str, allow_dynamic: bool = True) -> str | None:
         normalized_query = self.normalize_query(question)
+        self.last_rejection_reason = ""
         if not normalized_query or normalized_query in self.WEAK_LOOKUP_QUERIES:
             return None
 
-        query_tokens = self._tokenize(normalized_query)
         best_answer = ""
         best_score = 0.0
+        query_tokens = self._tokenize(normalized_query)
 
         for entry in self._iter_valid_entries():
-            confidence = self._safe_float(entry.get("confidence"), 0.0)
-            if confidence < self.min_confidence:
+            if not allow_dynamic and self.governor.memory_type_for_entry(entry) == "dynamic_fact":
                 continue
-
-            stored_question = self.normalize_query(str(entry.get("question", "")))
+            stored_question = self.normalize_query(str(entry.get("question") or entry.get("query") or ""))
             if not stored_question:
                 continue
 
+            eligible, effective_confidence, _reason = self.governor.is_retrieval_eligible(
+                normalized_query,
+                entry,
+                self.min_confidence,
+            )
+            if not eligible:
+                if _reason == "expired" and self.governor.memory_type_for_entry(entry) == "dynamic_fact":
+                    score = self.similarity_score(normalized_query, query_tokens, stored_question)
+                    if score > self.similarity_threshold:
+                        self.last_rejection_reason = "expired_dynamic_fact"
+                continue
+
             score = self.similarity_score(normalized_query, query_tokens, stored_question)
-            if score > self.similarity_threshold and score > best_score:
+            weighted_score = score * effective_confidence
+            if score > self.similarity_threshold and weighted_score > best_score:
                 answer = str(entry.get("answer", "")).strip()
                 if answer:
-                    best_score = score
+                    best_score = weighted_score
                     best_answer = answer
 
         return best_answer or None
 
-    def store(self, question: str, answer: str, confidence: float, timestamp: str | None = None) -> bool:
+    def store(self, question: str, answer: str, confidence: float, timestamp: str | None = None, source: str = "unknown") -> bool:
         normalized_question = self.normalize_query(question)
         clean_answer = " ".join((answer or "").strip().split())
         if not normalized_question or not self._is_storeable_query(normalized_question) or not self._is_safe_answer(clean_answer):
             return False
+        should_store, memory_type = self.governor.should_store(normalized_question, clean_answer)
+        if not should_store:
+            return False
 
-        confidence_value = max(0.0, min(1.0, self._safe_float(confidence, 0.0)))
+        confidence_value = self.governor.cap_confidence(max(0.0, min(1.0, self._safe_float(confidence, 0.0))), source)
+        log_event(
+            logger,
+            "source_reliability_applied",
+            source="answer_memory",
+            success=True,
+            answer_source=source,
+            confidence=round(confidence_value, 3),
+        )
         timestamp_value = timestamp or datetime.now(timezone.utc).isoformat()
         entries = self._get_entries()
 
         for entry in entries:
-            if self.normalize_query(str(entry.get("question", ""))) != normalized_question:
+            stored_question = self.normalize_query(str(entry.get("question") or entry.get("query") or ""))
+            existing_source = str(entry.get("source", "unknown") or "unknown").strip().lower()
+            query_similarity = self.similarity_score(normalized_question, self._tokenize(normalized_question), stored_question)
+            answer_similarity = self._answer_similarity(clean_answer, str(entry.get("answer", "")).strip())
+            if query_similarity > 0.9 and answer_similarity > 0.9 and existing_source == source.strip().lower():
+                entry["timestamp"] = timestamp_value
+                entry["confidence"] = max(confidence_value, self._safe_float(entry.get("confidence"), 0.0))
+                entry["source"] = source
+                entry["memory_type"] = memory_type
+                entry["query"] = normalized_question
+                entry["question"] = normalized_question
+                self._set_entries(entries)
+                log_event(logger, "memory_deduplicated", source="answer_memory", success=True, query=normalized_question)
+                return True
+
+            if stored_question != normalized_question:
                 continue
+            if memory_type == "dynamic_fact" and self.governor.memory_type_for_entry(entry) == "dynamic_fact":
+                entry["answer"] = clean_answer
+                entry["confidence"] = confidence_value
+                entry["timestamp"] = timestamp_value
+                entry["source"] = source
+                entry["memory_type"] = memory_type
+                entry["query"] = normalized_question
+                entry["question"] = normalized_question
+                self._set_entries(entries)
+                log_event(logger, "memory_deduplicated", source="answer_memory", success=True, query=normalized_question)
+                return True
             if str(entry.get("answer", "")).strip() != clean_answer:
                 continue
             entry["confidence"] = max(confidence_value, self._safe_float(entry.get("confidence"), 0.0))
             entry["timestamp"] = timestamp_value
+            entry["source"] = source
+            entry["memory_type"] = memory_type
+            entry["query"] = normalized_question
             self._set_entries(entries)
             return True
 
         entries.append(
             {
+                "query": normalized_question,
                 "question": normalized_question,
                 "answer": clean_answer,
+                "source": source,
+                "memory_type": memory_type,
                 "confidence": confidence_value,
                 "timestamp": timestamp_value,
             }
@@ -133,6 +195,13 @@ class AnswerMemory:
             return 0.0
         return overlap / union
 
+    def _answer_similarity(self, answer: str, stored_answer: str) -> float:
+        normalized_answer = self.normalize_query(answer)
+        normalized_stored = self.normalize_query(stored_answer)
+        if not normalized_answer or not normalized_stored:
+            return 0.0
+        return self.similarity_score(normalized_answer, self._tokenize(normalized_answer), normalized_stored)
+
     def normalize_query(self, text: str) -> str:
         cleaned = (text or "").strip().lower()
         cleaned = re.sub(r"[^\w\s]", " ", cleaned)
@@ -160,12 +229,8 @@ class AnswerMemory:
         return not any(pattern in lowered for pattern in self.INVALID_MEMORY_PATTERNS)
 
     def _iter_valid_entries(self) -> list[dict[str, Any]]:
-        cutoff = datetime.now(timezone.utc) - timedelta(days=self.expiry_days)
         valid: list[dict[str, Any]] = []
         for entry in self._get_entries():
-            ts = self._parse_iso(entry.get("timestamp"))
-            if ts is None or ts < cutoff:
-                continue
             valid.append(entry)
         return valid
 

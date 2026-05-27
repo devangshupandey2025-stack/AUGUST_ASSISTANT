@@ -84,6 +84,34 @@ class KnowledgeGovernor:
         memory_type = self.classify_memory(normalized, answer)
         return memory_type != "conversation", memory_type
 
+    def should_store_research(self, query: str, answer: str, confidence: float) -> bool:
+        """Gate whether a web research result should be persisted to memory.
+
+        Returns False (and logs ``research_memory_blocked``) when the result
+        is too weak to be trustworthy.
+        """
+        if confidence < 0.8:
+            log_event(logger, "research_memory_blocked", source="knowledge_governor", success=False, query=query, reason="low_confidence", confidence=round(confidence, 3))
+            return False
+
+        normalized_answer = self._normalize(answer)
+        filler_phrases = (
+            "is a concept that refers to",
+            "is an important concept",
+            "core idea, common use cases, and trade-offs",
+            "it generally involves understanding",
+        )
+        if any(phrase in normalized_answer for phrase in filler_phrases):
+            log_event(logger, "research_memory_blocked", source="knowledge_governor", success=False, query=query, reason="filler_content")
+            return False
+
+        if len((answer or "").strip()) < 50:
+            log_event(logger, "research_memory_blocked", source="knowledge_governor", success=False, query=query, reason="answer_too_short")
+            return False
+
+        log_event(logger, "research_memory_stored", source="knowledge_governor", success=True, query=query, confidence=round(confidence, 3))
+        return True
+
     def cap_confidence(self, confidence: float, source: str) -> float:
         normalized_source = self._normalize(source) or "unknown"
         cap = SOURCE_CONFIDENCE_CAPS.get(normalized_source)

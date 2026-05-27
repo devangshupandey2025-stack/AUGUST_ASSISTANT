@@ -1346,6 +1346,7 @@ class DecisionEngine:
             log_event(logger, "memory_miss", source="decision.answer_memory", success=False, query=raw_text)
 
         local_result: dict[str, Any] = {"success": False, "error": "local_skipped"}
+        local_failed = False
         if is_static or is_reasoning or follow_up_request:
             local_result = try_local_answer(answer_query)
             if local_result.get("success"):
@@ -1353,7 +1354,8 @@ class DecisionEngine:
                 local_confidence = float(local_result.get("confidence", 0.6) or 0.6)
                 local_source = str(local_result.get("source", "local_match") or "local_match").strip() or "local_match"
                 if self._is_weak_local_answer(answer_query, text, local_confidence):
-                    log_event(logger, "local_low_confidence", source="decision.answer", success=False, query=raw_text, confidence=local_confidence)
+                    log_event(logger, "local_confidence_too_low", source="decision.answer", success=False, query=raw_text, confidence=local_confidence)
+                    local_failed = True
                 else:
                     topic = self._topic_from_context(memory) or self._normalize(answer_query)
                     self._remember_answer(raw_text, text, topic)
@@ -1375,14 +1377,17 @@ class DecisionEngine:
                     source_name = "decision.local_generated" if local_source == "local_generated" else "decision.local"
                     source_note = "local_generated" if local_source == "local_generated" else "local_match"
                     return DecisionResult(mode="answer", source=source_name, response=text, notes=notes + [source_note])
+            else:
+                local_failed = True
             local_error = str(local_result.get("error", "unknown")).strip() or "unknown"
             log_event(logger, "local_failure", source="decision.answer", success=False, query=raw_text, reason=local_error)
 
-        if not follow_up_request and self._should_attempt_web_research(answer_query, query_type):
+        if not follow_up_request and self._should_attempt_web_research(answer_query, query_type, local_failed=local_failed):
             query = self._normalize(answer_query)
             if query and not follow_up_request:
                 self._last_query = query
                 logger.info("last_query updated -> %s", self._last_query)
+            log_event(logger, "web_research_fallback_triggered", source="decision.answer", success=True, query=raw_text, query_type=query_type, local_failed=local_failed)
             plan = CommandPlan(
                 commands=[
                     ParsedCommand(
@@ -1437,9 +1442,15 @@ class DecisionEngine:
         )
         return DecisionResult(mode="answer", source="decision.fallback_prompt", response=self.SEARCH_PROMPT, notes=notes + ["fallback_triggered"])
 
-    def _should_attempt_web_research(self, query: str, query_type: str | None = None) -> bool:
+    def _should_attempt_web_research(self, query: str, query_type: str | None = None, local_failed: bool = False) -> bool:
         resolved_type = query_type or self._classify_query_type(query, parsed_plan=None)
-        return resolved_type in self.WEB_RESEARCH_QUERY_TYPES
+        if resolved_type in self.WEB_RESEARCH_QUERY_TYPES:
+            return True
+        # Allow static_knowledge to fall back to web research when local answers
+        # failed or were too weak.  This prevents hallucination for unknown terms.
+        if local_failed and resolved_type == QUERY_TYPES["static_knowledge"]:
+            return True
+        return False
 
     def _get_session_cache(self, query: str) -> str:
         key = self._normalize(query)
@@ -1464,14 +1475,14 @@ class DecisionEngine:
     def _is_weak_local_answer(self, query: str, answer: str, confidence: float) -> bool:
         if confidence < self.HIGH_CONFIDENCE_THRESHOLD:
             return True
-        query_type = self._classify_query_type(query, parsed_plan=None)
-        if query_type not in {QUERY_TYPES["reasoning"], QUERY_TYPES["dynamic_fact"], QUERY_TYPES["current_event"]}:
-            return False
         normalized_answer = self._normalize(answer)
         weak_phrases = (
             "is a concept that refers to",
             "is an important concept",
             "core idea, common use cases, and trade-offs",
+            "it generally involves understanding",
+            "is a concept that refers to how a specific idea",
+            "a core idea used to explain how something works",
         )
         return any(phrase in normalized_answer for phrase in weak_phrases)
 

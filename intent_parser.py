@@ -22,6 +22,7 @@ SUPPORTED_ACTIONS = {
     "current_date",
     "greeting",
     "generate_document",
+    "web_research",
 }
 
 
