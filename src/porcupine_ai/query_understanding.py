@@ -157,6 +157,24 @@ _ALL_ENTITIES: set[str] = set()
 for _category_entities in KNOWN_ENTITIES.values():
     _ALL_ENTITIES.update(_category_entities)
 
+# ---------------------------------------------------------------------------
+# Office titles and topic categories for metadata enrichment
+# ---------------------------------------------------------------------------
+OFFICE_TITLES: tuple[str, ...] = (
+    "chief minister", "prime minister", "president", "governor",
+    "ceo", "director", "head", "chairman", "leader",
+    "leader of opposition", "speaker", "mayor",
+)
+
+TOPIC_CATEGORY_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "government": ("minister", "parliament", "assembly", "election", "vote", "democracy", "president", "governor", "cm", "pm"),
+    "technology": ("software", "hardware", "programming", "framework", "library", "api", "code", "developer", "algorithm"),
+    "science": ("research", "study", "experiment", "hypothesis", "theory", "physics", "chemistry", "biology"),
+    "business": ("company", "startup", "revenue", "profit", "market", "stock", "share", "gdp", "economy"),
+    "weather": ("weather", "temperature", "rain", "humidity", "wind", "forecast", "sunny", "cloudy"),
+    "news": ("news", "latest", "breaking", "today", "recent", "update"),
+}
+
 # Minimum fuzzy match score to accept a token as an entity.
 FUZZY_THRESHOLD = 78
 
@@ -173,6 +191,13 @@ class QueryIntent:
     topic: str = ""
     raw_query: str = ""
     confidence: float = 0.0
+    metadata: dict[str, object] = field(default_factory=dict)
+    # metadata may contain:
+    #   "locations": ["West Bengal", "Kolkata"]
+    #   "offices": ["Chief Minister"]
+    #   "topic_category": "government"
+    #   "sub_type": "office_holder"
+    #   "time_relevance": "dynamic"
 
 
 # ---------------------------------------------------------------------------
@@ -240,12 +265,16 @@ def understand_query(query: str) -> QueryIntent:
     topic = _extract_topic(cleaned, query_type)
     confidence = _estimate_confidence(query_type, entities, cleaned)
 
+    # Enrich metadata with locations, offices, and topic category.
+    metadata = _build_metadata(cleaned, entities)
+
     intent = QueryIntent(
         type=query_type,
         entities=entities,
         topic=topic,
         raw_query=query,
         confidence=confidence,
+        metadata=metadata,
     )
 
     log_event(
@@ -258,6 +287,7 @@ def understand_query(query: str) -> QueryIntent:
         entities=intent.entities,
         topic=intent.topic,
         confidence=round(intent.confidence, 3),
+        metadata_keys=list(metadata.keys()),
     )
     return intent
 
@@ -426,6 +456,107 @@ def _estimate_confidence(query_type: str, entities: list[str], cleaned: str) -> 
         score += 0.15
 
     return min(score, 0.99)
+
+
+# ---------------------------------------------------------------------------
+# Metadata enrichment
+# ---------------------------------------------------------------------------
+_INDIAN_STATES: set[str] = {
+    "west bengal", "east bengal", "tamil nadu", "karnataka",
+    "kerala", "andhra pradesh", "telangana", "maharashtra",
+    "gujarat", "rajasthan", "uttar pradesh", "bihar", "jharkhand",
+    "odisha", "madhya pradesh", "chhattisgarh", "haryana",
+    "punjab", "himachal pradesh", "uttarakhand", "assam",
+    "meghalaya", "manipur", "mizoram", "nagaland", "sikkim",
+    "arunachal pradesh", "tripura", "goa", "delhi",
+}
+
+_COUNTRIES: set[str] = {
+    "india", "united states", "usa", "uk", "united kingdom",
+    "china", "japan", "russia", "france", "germany", "australia",
+    "canada", "brazil", "south korea", "north korea",
+}
+
+_CITY_NAMES: set[str] = {
+    "kolkata", "mumbai", "delhi", "new delhi", "bengaluru", "bangalore",
+    "chennai", "hyderabad", "pune", "jaipur", "lucknow", "ahmedabad",
+    "thiruvananthapuram", "bhopal", "patna", "guwahati", "shimla",
+}
+
+_ALL_LOCATIONS: set[str] = _INDIAN_STATES | _COUNTRIES | _CITY_NAMES
+
+
+def _build_metadata(cleaned: str, entities: list[str]) -> dict[str, object]:
+    """Build metadata dict with locations, offices, and topic category.
+
+    Also mutates *entities* in place to include detected offices and locations
+    so that downstream validators have the information they need.
+    """
+    metadata: dict[str, object] = {}
+
+    # --- Locations ------------------------------------------------
+    locations: list[str] = []
+    seen_locations: set[str] = set()
+
+    # Pass 1: check existing entities.
+    for entity in entities:
+        entity_lower = entity.lower()
+        if entity_lower in _ALL_LOCATIONS and entity_lower not in seen_locations:
+            locations.append(entity)
+            seen_locations.add(entity_lower)
+
+    # Pass 2: scan raw query text for location names (longest first).
+    for loc_name in sorted(_ALL_LOCATIONS, key=len, reverse=True):
+        if loc_name in cleaned and loc_name not in seen_locations:
+            locations.append(loc_name.title())
+            seen_locations.add(loc_name)
+
+    if locations:
+        metadata["locations"] = locations
+
+    # --- Offices --------------------------------------------------
+    offices: list[str] = []
+    for office in OFFICE_TITLES:
+        if office in cleaned:
+            offices.append(office.title())
+    if offices:
+        metadata["offices"] = offices
+
+    # --- Append offices and locations to entities list -------------
+    for office in offices:
+        if office not in entities:
+            entities.append(office)
+    for loc in locations:
+        if loc not in entities:
+            entities.append(loc)
+
+    # --- Topic category -------------------------------------------
+    topic_category = _detect_topic_category(cleaned)
+    if topic_category:
+        metadata["topic_category"] = topic_category
+
+    # --- Time relevance -------------------------------------------
+    time_relevance = "static"
+    dynamic_markers = ("current", "latest", "today", "yesterday", "recent", "breaking", "now")
+    if any(marker in cleaned for marker in dynamic_markers):
+        time_relevance = "dynamic"
+    metadata["time_relevance"] = time_relevance
+
+    return metadata
+
+
+def _detect_topic_category(cleaned: str) -> str:
+    """Detect the primary topic category from query text."""
+    best_category = "general"
+    best_score = 0
+
+    for category, keywords in TOPIC_CATEGORY_KEYWORDS.items():
+        score = sum(1 for kw in keywords if kw in cleaned)
+        if score > best_score:
+            best_score = score
+            best_category = category
+
+    return best_category if best_score > 0 else "general"
 
 
 # ---------------------------------------------------------------------------

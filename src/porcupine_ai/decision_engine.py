@@ -1383,6 +1383,26 @@ class DecisionEngine:
             log_event(logger, "local_failure", source="decision.answer", success=False, query=raw_text, reason=local_error)
 
         if not follow_up_request and self._should_attempt_web_research(answer_query, query_type, local_failed=local_failed):
+            # ==============================================================
+            # Weather API shortcut — use structured API instead of scraping.
+            # ==============================================================
+            if self._is_weather_query(normalized_query):
+                try:
+                    from weather_service import get_weather
+                    locations = self._extract_locations_from_query(normalized_query)
+                    location = locations[0] if locations else "auto-detected"
+                    weather = get_weather(location)
+                    if weather.success:
+                        log_event(logger, "weather_api_used", source="decision.answer", success=True, query=raw_text, location=location)
+                        topic = self._topic_from_context(memory) or self._normalize(answer_query)
+                        self._remember_answer(raw_text, weather.summary, topic)
+                        if not follow_up_request:
+                            self._update_last_query(answer_query)
+                        self._store_session_cache(answer_query, weather.summary)
+                        return DecisionResult(mode="answer", source="decision.weather_api", response=weather.summary, notes=notes + ["weather_api"])
+                except Exception as exc:
+                    log_event(logger, "weather_api_failed", source="decision.answer", success=False, query=raw_text, error=str(exc))
+
             query = self._normalize(answer_query)
             if query and not follow_up_request:
                 self._last_query = query
@@ -1626,3 +1646,21 @@ class DecisionEngine:
             "options": list(pending.options),
             "timestamp": pending.timestamp,
         }
+
+    def _is_weather_query(self, normalized: str) -> bool:
+        """Check if the query is asking about weather."""
+        weather_markers = {"weather", "temperature", "rain", "humidity", "wind", "forecast", "sunny", "cloudy"}
+        return any(marker in normalized for marker in weather_markers)
+
+    def _extract_locations_from_query(self, normalized: str) -> list[str]:
+        """Extract location entities from the query text."""
+        from entity_guard import extract_entities
+        entities = extract_entities(normalized)
+        locations: list[str] = []
+        for city in entities.cities:
+            locations.append(city.title())
+        for state in entities.states:
+            locations.append(state.title())
+        for country in entities.countries:
+            locations.append(country.title())
+        return locations

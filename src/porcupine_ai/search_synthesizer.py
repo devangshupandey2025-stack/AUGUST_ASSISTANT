@@ -17,21 +17,46 @@ from utils.logger import get_logger, log_event
 logger = get_logger("SearchSynthesizer")
 
 # ---------------------------------------------------------------------------
-# Search query templates — {a}, {b}, {topic}, {year} are filled at runtime.
+# Search query templates — specialized by query sub-type.
 # ---------------------------------------------------------------------------
 SEARCH_TEMPLATES: dict[str, str] = {
+    "weather": "{location} weather today",
+    "office_holder": "Current {office} of {region}",
+    "stock": "{company} stock price today",
+    "election": "{region} election results {year}",
     "comparison": "{a} vs {b} comparison {year}",
-    "definition": "what is {topic} explained",
-    "dynamic_fact": "{topic} latest {year}",
-    "tutorial": "how to {topic} step by step",
+    "definition": "What is {topic}",
+    "dynamic_fact": "{topic} {year}",
+    "tutorial": "How to {topic}",
     "research": "{topic} detailed explanation",
-    "reasoning": "why {topic} explained",
+    "reasoning": "Why {topic} explained",
+    "news": "{topic} latest news {year}",
 }
 
 # ---------------------------------------------------------------------------
 # Topic-aware preferred domain lists
 # ---------------------------------------------------------------------------
 TOPIC_DOMAINS: dict[str, list[str]] = {
+    "weather": [
+        "weather.gov",
+        "mausam.gov.in",
+        "imd.gov.in",
+        "accuweather.com",
+        "weather.com",
+        "weatherbug.com",
+        "bbc.com",
+    ],
+    "government": [
+        "gov.in",
+        "gov.uk",
+        "usa.gov",
+        "wikipedia.org",
+        "britannica.com",
+        "pib.gov.in",
+        "ndtv.com",
+        "thehindu.com",
+        "india.gov.in",
+    ],
     "ai": [
         "openai.com",
         "anthropic.com",
@@ -162,14 +187,41 @@ def synthesize_search_query(intent: QueryIntent, normalized_query: str) -> str:
     """Build an optimised search query from the structured *intent*.
 
     Uses the appropriate template for the query type and fills in entity
-    names, topic, and the current year.
+    names, topic, and the current year. Handles specialized sub-types
+    like weather, office_holder, stock, and election.
     """
     if intent.type == "conversation":
         return normalized_query
 
     year = str(datetime.now().year)
+    metadata = getattr(intent, "metadata", {})
 
-    # Comparison: use both entities.
+    # --- Weather ---
+    if intent.type == "dynamic_fact" and metadata.get("topic_category") == "weather":
+        locations = metadata.get("locations", [])
+        location = locations[0] if locations else _extract_location_from_entities(intent.entities)
+        if location:
+            synthesized = SEARCH_TEMPLATES["weather"].format(location=location)
+            log_event(logger, "search_query_generated", source="search_synthesizer", success=True,
+                      original=normalized_query, synthesized=synthesized, query_type="weather")
+            return _clean(synthesized)
+
+    # --- Office holder ---
+    if intent.type == "dynamic_fact" and metadata.get("offices"):
+        offices = metadata.get("offices", [])
+        office = offices[0] if offices else ""
+        locations = metadata.get("locations", [])
+        region = locations[0] if locations else _extract_location_from_entities(intent.entities)
+        if office and not region:
+            region = _extract_location_from_query(normalized_query)
+        if office and region:
+            synthesized = SEARCH_TEMPLATES["office_holder"].format(office=office, region=region)
+            synthesized += " official"
+            log_event(logger, "search_query_generated", source="search_synthesizer", success=True,
+                      original=normalized_query, synthesized=synthesized, query_type="office_holder")
+            return _clean(synthesized)
+
+    # --- Comparison: use both entities ---
     if intent.type == "comparison" and len(intent.entities) >= 2:
         synthesized = SEARCH_TEMPLATES["comparison"].format(
             a=intent.entities[0],
@@ -184,7 +236,7 @@ def synthesize_search_query(intent: QueryIntent, normalized_query: str) -> str:
         else:
             synthesized = normalized_query
 
-    synthesized = re.sub(r"\s+", " ", synthesized).strip()
+    synthesized = _clean(synthesized)
 
     log_event(
         logger,
@@ -247,8 +299,69 @@ def _detect_topic_category(intent: QueryIntent) -> list[str]:
     if any(kw in combined for kw in _MEDICAL_KEYWORDS):
         categories.append("medical")
 
+    # Weather detection.
+    weather_markers = {"weather", "temperature", "rain", "humidity", "wind", "forecast"}
+    if any(kw in combined for kw in weather_markers):
+        categories.append("weather")
+
+    # Government/office detection.
+    office_markers = {"minister", "president", "governor", "parliament", "assembly", "election"}
+    if any(kw in combined for kw in office_markers):
+        categories.append("government")
+
     # Dynamic facts often benefit from news sources.
     if intent.type == "dynamic_fact" and "news" not in categories:
         categories.append("news")
 
     return categories
+
+
+def _extract_location_from_entities(entities: list[str]) -> str:
+    """Extract a location from the entity list."""
+    location_entities = {
+        "west bengal", "tamil nadu", "karnataka", "kerala",
+        "andhra pradesh", "telangana", "maharashtra", "gujarat",
+        "rajasthan", "uttar pradesh", "bihar", "jharkhand",
+        "odisha", "madhya pradesh", "chhattisgarh", "haryana",
+        "punjab", "himachal pradesh", "uttarakhand", "assam",
+        "delhi", "india", "united states", "usa", "uk",
+    }
+    city_entities = {
+        "kolkata", "mumbai", "delhi", "new delhi", "bengaluru",
+        "bangalore", "chennai", "hyderabad", "pune", "jaipur",
+    }
+    for entity in entities:
+        if entity.lower() in city_entities or entity.lower() in location_entities:
+            return entity
+    return ""
+
+
+def _extract_location_from_query(query: str) -> str:
+    """Extract a location directly from the raw query text."""
+    all_locations = sorted(
+        {
+            "west bengal", "tamil nadu", "karnataka", "kerala",
+            "andhra pradesh", "telangana", "maharashtra", "gujarat",
+            "rajasthan", "uttar pradesh", "bihar", "jharkhand",
+            "odisha", "madhya pradesh", "chhattisgarh", "haryana",
+            "punjab", "himachal pradesh", "uttarakhand", "assam",
+            "meghalaya", "manipur", "mizoram", "nagaland", "sikkim",
+            "arunachal pradesh", "tripura", "goa", "delhi",
+            "india", "united states", "usa", "uk", "united kingdom",
+            "china", "japan", "russia", "france", "germany", "australia",
+            "canada", "brazil", "south korea", "north korea",
+            "kolkata", "mumbai", "new delhi", "bengaluru",
+            "bangalore", "chennai", "hyderabad", "pune", "jaipur",
+        },
+        key=len,
+        reverse=True,
+    )
+    query_lower = query.lower()
+    for loc in all_locations:
+        if loc in query_lower:
+            return loc.title()
+    return ""
+
+
+def _clean(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()

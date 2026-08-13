@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os, sys
+# Ensure package modules under src/porcupine_ai are importable by legacy bare imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'porcupine_ai'))
+
 from ai_parser import AIParser
 from app_registry import AppRegistry
 from context_engine import ContextEngine

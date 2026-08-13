@@ -37,6 +37,58 @@ DICTIONARY_DOMAINS: tuple[str, ...] = (
 # Query types where dictionary results are still acceptable.
 DICTIONARY_ACCEPTABLE_TYPES: set[str] = {"definition"}
 
+# Hard-rejected domains — app stores, spam, clickbait.
+REJECTED_DOMAINS: tuple[str, ...] = (
+    "play.google.com",
+    "apps.apple.com",
+    "apps.microsoft.com",
+    "blankwebsite.com",
+    "clickbait.com",
+)
+
+# Topic-specific preferred domains for relevance boosting.
+TOPIC_PREFERRED_DOMAINS: dict[str, list[str]] = {
+    "weather": [
+        "weather.gov",
+        "mausam.gov.in",
+        "imd.gov.in",
+        "accuweather.com",
+        "weather.com",
+        "weatherbug.com",
+        "bbc.com",
+    ],
+    "government": [
+        "gov.in",
+        "gov.uk",
+        "usa.gov",
+        "wikipedia.org",
+        "britannica.com",
+        "pib.gov.in",
+        "ndtv.com",
+        "india.gov.in",
+    ],
+    "programming": [
+        "docs.python.org",
+        "developer.mozilla.org",
+        "learn.microsoft.com",
+        "stackoverflow.com",
+        "geeksforgeeks.org",
+        "realpython.com",
+    ],
+    "news": [
+        "reuters.com",
+        "bbc.com",
+        "apnews.com",
+        "ndtv.com",
+        "thehindu.com",
+    ],
+    "science": [
+        "nature.com",
+        "sciencedirect.com",
+        "arxiv.org",
+    ],
+}
+
 _STOP_WORDS: set[str] = {
     "a", "an", "the", "is", "are", "was", "were", "be", "been",
     "am", "do", "does", "did", "will", "would", "could", "should",
@@ -138,10 +190,14 @@ def _relevance_score(
     keyword_score = _keyword_overlap(result, search_query)
     domain_score = _domain_relevance(result, preferred_domains, deprioritized)
 
+    # Boost score for topic-specific preferred domains.
+    topic_boost = _topic_domain_boost(result, intent)
+
     return (
-        entity_score * 0.35
-        + keyword_score * 0.35
-        + domain_score * 0.30
+        entity_score * 0.30
+        + keyword_score * 0.30
+        + domain_score * 0.25
+        + topic_boost * 0.15
     )
 
 
@@ -194,16 +250,56 @@ def _domain_relevance(
 def _is_irrelevant_result(result: object, intent: QueryIntent) -> bool:
     """Apply hard rejection rules — returns True to discard the result."""
     domain = _extract_domain(getattr(result, "href", "") or "")
+    href = getattr(result, "href", "") or ""
+    title = getattr(result, "title", "") or ""
 
     # Reject dictionary sites for non-definition queries.
     if intent.type not in DICTIONARY_ACCEPTABLE_TYPES:
         if any(domain == d or domain.endswith("." + d) for d in DICTIONARY_DOMAINS):
             return True
 
+    # Reject app store pages, spam, and clickbait domains.
+    if any(domain == d or domain.endswith("." + d) for d in REJECTED_DOMAINS):
+        return True
+
+    # Reject homepage-only results (URL ends with / and title is generic).
+    parsed = urlparse(href)
+    if parsed.path.rstrip("/") == "" and len(title.split()) <= 3:
+        return True
+
+    # Reject clickbait markers in title.
+    clickbait_markers = (
+        "you won't believe",
+        "shocking",
+        "this one trick",
+        "click here",
+        "download now",
+        "sign up free",
+    )
+    title_lower = title.lower()
+    if any(marker in title_lower for marker in clickbait_markers):
+        return True
+
     # For comparison queries with known entities, reject if NONE appear in text.
     if intent.type == "comparison" and intent.entities:
         text = _result_text(result).lower()
         if not any(entity.lower() in text for entity in intent.entities):
+            return True
+
+    # Office-holder queries: reject results about unrelated topics.
+    offices = intent.metadata.get("offices", []) if hasattr(intent, "metadata") else []
+    if offices:
+        title_lower = title.lower()
+        OFFICEHOLDER_IRRELEVANT_MARKERS = (
+            "electric current", "current electricity", "electrical",
+            "physics", "electronics", "circuit", "ohm",
+            "formula", "equation", "derivation",
+        )
+        if any(marker in title_lower for marker in OFFICEHOLDER_IRRELEVANT_MARKERS):
+            return True
+        # Reject domains clearly about physics/engineering.
+        OFFICEHOLDER_BAD_DOMAINS = ("physics", "electrical", "electronics")
+        if any(marker in domain for marker in OFFICEHOLDER_BAD_DOMAINS):
             return True
 
     return False
@@ -234,3 +330,37 @@ def _extract_keywords(text: str) -> set[str]:
     short_terms = {"ai", "ml", "ui", "ux", "os", "qa", "db", "js", "ts"}
     words = set(re.findall(r"[a-z0-9]+", (text or "").lower()))
     return {w for w in words if (len(w) > 2 or w in short_terms) and w not in _STOP_WORDS}
+
+
+def _topic_domain_boost(result: object, intent: QueryIntent) -> float:
+    """Boost score if the result domain matches the query's topic category."""
+    metadata = getattr(intent, "metadata", {})
+    topic_category = metadata.get("topic_category", "")
+    domain = _extract_domain(getattr(result, "href", "") or "")
+    if not domain:
+        return 0.0
+
+    # Office-holder queries: strong boost for government/encyclopedia/news domains.
+    offices = metadata.get("offices", []) if hasattr(intent, "metadata") else []
+    if offices:
+        OFFICEHOLDER_PREFERRED = (
+            "gov.in", "wikipedia.org", "britannica.com",
+            "ndtv.com", "thehindu.com", "india.gov.in",
+            "pib.gov.in", "reuters.com", "bbc.com",
+        )
+        for preferred in OFFICEHOLDER_PREFERRED:
+            if domain == preferred or domain.endswith("." + preferred):
+                return 1.0
+
+    if not topic_category:
+        return 0.0
+
+    topic_domains = TOPIC_PREFERRED_DOMAINS.get(topic_category, [])
+    if not topic_domains:
+        return 0.0
+
+    for preferred in topic_domains:
+        if domain == preferred or domain.endswith("." + preferred):
+            return 1.0
+
+    return 0.0

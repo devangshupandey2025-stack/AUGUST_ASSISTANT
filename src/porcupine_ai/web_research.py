@@ -38,6 +38,9 @@ from query_normalizer import normalize_query
 from search_synthesizer import synthesize_search_query, get_preferred_domains, get_deprioritized_domains
 from result_filter import filter_results
 from retrieval_confidence import assess_retrieval_confidence
+from result_validator import validate_search_result, validate_article_content, verify_answer_relevance
+from consensus import build_consensus
+from providers.provider_router import ProviderRouter
 from utils.logger import get_logger, log_event
 
 logger = get_logger("WebResearch")
@@ -66,6 +69,7 @@ MAX_RETRIES = 2
 BACKOFF = [1, 2]
 
 MIN_RESEARCH_CONFIDENCE = 0.7
+MIN_PROVIDER_CONFIDENCE = 0.5
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -415,6 +419,97 @@ class WebResearchEngine:
         log_event(logger, "query_normalized", source="web_research", success=True,
                   original=clean_query, normalized=normalized)
 
+        # --- Cache check (use original query as key for stability) ---
+        cache_key = clean_query.lower()
+        cache_hit = self._get_cached(cache_key)
+        if cache_hit is not None:
+            return cache_hit
+
+        # =================================================================
+        # PROVIDER ROUTER — check if a specialized provider can handle this
+        # =================================================================
+        intent_topic = intent.topic or normalized
+
+        provider_router = ProviderRouter()
+        provider_result = provider_router.route(intent)
+        if provider_result and provider_result.success:
+            log_event(logger, "provider_result_received", source="web_research",
+                      success=True, provider=provider_result.provider,
+                      title=provider_result.title,
+                      confidence=round(provider_result.confidence, 3))
+
+            # Validate the provider result through the existing pipeline.
+            article_validation = validate_article_content(
+                provider_result.raw_text, intent, title=provider_result.title
+            )
+            article_valid = article_validation.get("valid", False)
+
+            if article_valid:
+                answer_verification = verify_answer_relevance(
+                    provider_result.raw_text, intent_topic, intent
+                )
+                answer_valid = answer_verification.get("valid", False)
+            else:
+                answer_valid = False
+
+            if article_valid and answer_valid and provider_result.confidence >= MIN_PROVIDER_CONFIDENCE:
+                answer = provider_result.summary
+                confidence = provider_result.confidence
+
+                # Optional Gemini polish (never blocking).
+                if ai_parser is not None and hasattr(ai_parser, "summarize_web_content"):
+                    try:
+                        polished = ai_parser.summarize_web_content(
+                            answer,
+                            query=intent_topic,
+                            source_url=provider_result.url,
+                            title=provider_result.title,
+                        )
+                        if polished.get("success") and polished.get("text"):
+                            answer = polished["text"]
+                            log_event(logger, "provider_gemini_polish",
+                                      source="web_research", success=True,
+                                      query=clean_query)
+                    except Exception:
+                        pass
+
+                if include_attribution:
+                    answer = self._with_source_attribution(answer, provider_result.url)
+
+                self._remember_research(clean_query, provider_result.url)
+                self._set_cached(cache_key, answer, provider_result.url,
+                                 provider_result.title,
+                                 provider_result.raw_text, confidence)
+
+                log_event(logger, "provider_answer_returned",
+                          source="web_research", success=True,
+                          query=clean_query,
+                          provider=provider_result.provider,
+                          confidence=round(confidence, 3))
+
+                return WebResearchResult(
+                    True,
+                    answer,
+                    source_url=provider_result.url,
+                    title=provider_result.title,
+                    article_text=provider_result.raw_text,
+                    source_urls=[provider_result.url],
+                    confidence=confidence,
+                )
+
+            # Provider result was not usable — log reason and fall through.
+            if not article_valid:
+                reason = article_validation.get("reason", "validation_failed")
+            elif not answer_valid:
+                reason = answer_verification.get("reason", "verification_failed")
+            else:
+                reason = f"low_confidence:{round(provider_result.confidence, 3)}"
+
+            log_event(logger, "provider_result_skipped",
+                      source="web_research", success=False,
+                      query=clean_query, provider=provider_result.provider,
+                      reason=reason)
+
         # =================================================================
         # PHASE 3 — Search Query Synthesis (template-based)
         # =================================================================
@@ -427,12 +522,6 @@ class WebResearchEngine:
             expanded_query, expansions = expand_acronyms(clean_query)
             if expansions:
                 search_query = expanded_query
-
-        # --- Cache check (use original query as key for stability) ---
-        cache_key = clean_query.lower()
-        cache_hit = self._get_cached(cache_key)
-        if cache_hit is not None:
-            return cache_hit
 
         log_event(logger, "research_query_started", source="web_research", success=True, query=clean_query, search_query=search_query)
 
@@ -447,6 +536,21 @@ class WebResearchEngine:
             raw_results = filter_results(raw_results, intent, search_query, preferred_domains)
             log_event(logger, "domain_rank_applied", source="web_research", success=True,
                       query=clean_query, result_count=len(raw_results), query_type=intent.type)
+
+            # =============================================================
+            # PHASE 4a — Entity Validation (before article fetch)
+            # =============================================================
+            log_event(logger, "entity_validation_started", source="web_research", success=True, query=clean_query)
+            validated_results = []
+            for result in raw_results:
+                validation = validate_search_result(result, intent, intent.entities)
+                if validation["valid"]:
+                    validated_results.append(result)
+                    log_event(logger, "source_accepted", source="web_research", success=True, url=result.href, overlap=validation.get("entity_overlap", 0))
+                else:
+                    log_event(logger, "source_rejected", source="web_research", success=True, url=result.href, reason=validation["reason"])
+            raw_results = validated_results
+            log_event(logger, "entity_validation_passed", source="web_research", success=True, remaining=len(raw_results))
 
             # Sort remaining by source quality — trusted domains first.
             raw_results.sort(key=lambda r: self._result_source_quality(r), reverse=True)
@@ -467,7 +571,28 @@ class WebResearchEngine:
                 if len(article_text) < MIN_TEXT_LENGTH:
                     continue
 
+                # ==========================================================
+                # PHASE 5a — Article Content Validation
+                # ==========================================================
+                log_event(logger, "article_validation_started", source="web_research", success=True, url=result.href)
+                article_validation = validate_article_content(article_text, intent, title=result.title)
+                if not article_validation["valid"]:
+                    log_event(logger, "article_validation_failed", source="web_research", success=False, url=result.href, reason=article_validation["reason"])
+                    continue
+                log_event(logger, "article_validation_passed", source="web_research", success=True, url=result.href, coverage=article_validation.get("coverage", 0))
+
                 extractor_quality = self._extractor_quality(result.href, article_text)
+
+                # ==========================================================
+                # PHASE 5b — Answer Verification
+                # ==========================================================
+                log_event(logger, "answer_validation_started", source="web_research", success=True, url=result.href)
+                answer_verification = verify_answer_relevance(article_text, search_query, intent)
+                if not answer_verification["valid"]:
+                    log_event(logger, "answer_validation_failed", source="web_research", success=False, url=result.href, reason=answer_verification["reason"])
+                    continue
+                log_event(logger, "answer_validation_passed", source="web_research", success=True, url=result.href)
+
                 try:
                     answer = self._summarize(article_text, search_query, result.title, result.snippet)
                 except Exception as exc:
@@ -557,7 +682,7 @@ class WebResearchEngine:
                     break
 
             # =============================================================
-            # PHASE 7 — Synthesize final answer from collected sources
+            # PHASE 7 — Deterministic Multi-Source Consensus
             # =============================================================
             if not valid_extractions:
                 log_event(logger, "research_all_sources_exhausted", source="web_research", success=False, query=clean_query)
@@ -568,13 +693,31 @@ class WebResearchEngine:
                 log_event(logger, "multi_source_consensus_started", source="web_research", success=True,
                           query=clean_query, source_count=len(valid_extractions))
 
-            # Use the best result as the primary answer.
+            # Build deterministic consensus from collected sources.
+            consensus_result = build_consensus(valid_extractions, intent)
+            answer = str(consensus_result.get("answer", ""))
+            source_urls = [str(ext["source_url"]) for ext in valid_extractions]
+
+            # Use the best source as primary for metadata.
             best = max(valid_extractions, key=lambda x: float(x["confidence"]))
-            answer = str(best["answer"])
             confidence = float(best["confidence"])
             primary_result = best["result"]
             article_text = str(best["article_text"])
-            source_urls = [str(ext["source_url"]) for ext in valid_extractions]
+
+            # Optional: Gemini polish (only if available, never blocking).
+            if ai_parser is not None and hasattr(ai_parser, "summarize_web_content"):
+                try:
+                    polished = ai_parser.summarize_web_content(
+                        answer,
+                        query=search_query,
+                        source_url="consensus",
+                        title="Multi-source consensus",
+                    )
+                    if polished.get("success") and polished.get("text"):
+                        answer = polished["text"]
+                        log_event(logger, "consensus_gemini_polish", source="web_research", success=True, query=clean_query)
+                except Exception:
+                    pass  # Gemini failed, local consensus is still correct.
 
             if include_attribution:
                 answer = self._with_source_attribution(answer, str(best["source_url"]))
