@@ -1,4 +1,4 @@
-# Project updates — Porcupine AI Assistant (snapshot)
+# Project updates — August AI Assistant (snapshot)
 
 Summary
 -------
