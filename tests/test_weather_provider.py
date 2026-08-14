@@ -594,7 +594,7 @@ class WeatherProviderIntegrationTests(unittest.TestCase):
     def test_weather_query_handled_by_weather_provider(self) -> None:
         from august.web_research import WebResearchEngine
 
-        engine = WebResearchEngine()
+        WebResearchEngine()
         intent = _make_intent(
             query_type="dynamic_fact",
             entities=["Kolkata"],

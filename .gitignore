@@ -16,6 +16,7 @@ ENV/
 
 logs/
 *.log
+.omo
 
 app_registry_cache.json
 memory.json

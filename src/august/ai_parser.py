@@ -567,7 +567,7 @@ User input:
 
         raise AIParserError(f"unsupported_terminal_action:{action}")
 
-    def _safe_fallback(self, user_input: str) -> CommandPlan:
+    def _safe_fallback(self, user_input: str) -> CommandPlan | None:
         cleaned = " ".join((user_input or "").strip().lower().split())
         if self._looks_like_question(cleaned) or self._looks_conversational(cleaned) or self._looks_toxic(cleaned):
             return None

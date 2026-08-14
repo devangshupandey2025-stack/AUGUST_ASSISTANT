@@ -40,7 +40,36 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+exclude = [
+    "_tentative_deletions",
+    "src/august/test_gui.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 ignore = ["E501"]
+
+[tool.mypy]
+files = ["src/august"]
+exclude = "(^|/)(jarvis_assistant|jarvis2\\.0|test_gui)\\.py$|(^|/)core/listener\\.py$"
+
+[[tool.mypy.overrides]]
+module = [
+    "AppOpener",
+    "bs4",
+    "comtypes",
+    "fuzzywuzzy",
+    "google.generativeai",
+    "google_auth_oauthlib.*",
+    "googleapiclient.*",
+    "newspaper",
+    "pycaw.*",
+    "pyautogui",
+    "pyttsx3",
+    "readability",
+    "screen_brightness_control",
+    "sounddevice",
+    "speech_recognition",
+    "whisper",
+]
+ignore_missing_imports = true

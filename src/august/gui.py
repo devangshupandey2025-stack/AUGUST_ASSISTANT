@@ -67,36 +67,21 @@ class JarvisGUI:
         self.canvas.create_line(0, 375, 1100, 375, fill="#00162a", tags="bg")
 
         for m in [20, 25]:
-            self.canvas.create_line(m, m + 60, m, m, m + 60, m, fill="#003355", width=2, tags="bg")
+            self.canvas.create_line([m, m + 60, m, m, m + 60, m], fill="#003355", width=2, tags="bg")
             self.canvas.create_line(
-                1100 - m,
-                m + 60,
-                1100 - m,
-                m,
-                1100 - m - 60,
-                m,
+                [1100 - m, m + 60, 1100 - m, m, 1100 - m - 60, m],
                 fill="#003355",
                 width=2,
                 tags="bg",
             )
             self.canvas.create_line(
-                m,
-                750 - m - 60,
-                m,
-                750 - m,
-                m + 60,
-                750 - m,
+                [m, 750 - m - 60, m, 750 - m, m + 60, 750 - m],
                 fill="#003355",
                 width=2,
                 tags="bg",
             )
             self.canvas.create_line(
-                1100 - m,
-                750 - m - 60,
-                1100 - m,
-                750 - m,
-                1100 - m - 60,
-                750 - m,
+                [1100 - m, 750 - m - 60, 1100 - m, 750 - m, 1100 - m - 60, 750 - m],
                 fill="#003355",
                 width=2,
                 tags="bg",

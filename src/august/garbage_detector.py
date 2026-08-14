@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Heuristics for rejecting obvious garbage or noise before execution."""
+
+from __future__ import annotations
 
 import re
 from typing import Any

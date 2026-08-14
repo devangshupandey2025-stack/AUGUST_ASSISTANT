@@ -593,7 +593,7 @@ class WebResearchProviderIntegrationTests(unittest.TestCase):
         to web research (which is tested by the existing test suite)."""
         from august.web_research import WebResearchEngine
 
-        engine = WebResearchEngine()
+        WebResearchEngine()
         intent = _make_intent(
             query_type="dynamic_fact",
             metadata={"topic_category": "weather", "time_relevance": "dynamic"},
@@ -623,7 +623,7 @@ class WebResearchProviderIntegrationTests(unittest.TestCase):
         from august.result_validator import validate_article_content, verify_answer_relevance
         from august.web_research import WebResearchEngine
 
-        engine = WebResearchEngine()
+        WebResearchEngine()
 
         search_response = Mock()
         search_response.status_code = 200

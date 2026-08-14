@@ -87,9 +87,9 @@ class AssistantScheduler:
         for reminder in reminders:
             if reminder.get("triggered"):
                 continue
-            due_at = self._parse_iso(reminder.get("time", ""))
+            due_at = self._parse_iso(str(reminder.get("time", "") or ""))
             if due_at and now >= due_at:
-                task = reminder.get("task", "your task")
+                task = str(reminder.get("task", "your task") or "your task")
                 logger.info("Triggering reminder for '%s'", task)
                 self.speak(f"Reminder: {task}.")
                 reminder["triggered"] = True

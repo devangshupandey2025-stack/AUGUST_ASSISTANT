@@ -105,17 +105,19 @@ class WikipediaProvider(BaseProvider):
             return ProviderResult(success=False, provider="Wikipedia",
                                   confidence=0.0)
 
-        extract = summary_data.get("extract", "")
+        extract = self._as_str(summary_data.get("extract", ""))
         if not extract:
             log_event(logger, "wikipedia_result", source="wikipedia_provider",
                       success=False, topic=topic, reason="empty_extract")
             return ProviderResult(success=False, provider="Wikipedia",
                                   confidence=0.0)
 
-        title = summary_data.get("title", page_title)
-        page_url = summary_data.get("content_urls", {}).get("desktop", {}).get("page", "")
+        title = self._as_str(summary_data.get("title", page_title)) or page_title
+        content_urls = self._as_dict(summary_data.get("content_urls"))
+        desktop_urls = self._as_dict(content_urls.get("desktop"))
+        page_url = self._as_str(desktop_urls.get("page", ""))
         is_redirect = summary_data.get("redirect_from", None) is not None
-        is_disambiguation = summary_data.get("type", "") == "disambiguation"
+        is_disambiguation = self._as_str(summary_data.get("type", "")) == "disambiguation"
 
         confidence = self._compute_confidence(
             topic=topic,
@@ -187,11 +189,19 @@ class WikipediaProvider(BaseProvider):
         except ValueError:
             return None
 
-        search_results = data.get("query", {}).get("search", [])
+        if not isinstance(data, dict):
+            return None
+        query_data = self._as_dict(data.get("query", {}))
+        search_results = query_data.get("search", [])
         if not search_results:
             return None
-
-        return str(search_results[0].get("title", ""))
+        if not isinstance(search_results, list):
+            return None
+        first_result = search_results[0] if search_results else {}
+        if not isinstance(first_result, dict):
+            return None
+        page_title = self._as_str(first_result.get("title", ""))
+        return page_title or None
 
     def _fetch_summary(self, page_title: str) -> dict[str, object] | None:
         """Fetch the summary/extract for a Wikipedia page."""
@@ -202,7 +212,8 @@ class WikipediaProvider(BaseProvider):
             try:
                 response = requests.get(url, headers=WIKIPEDIA_HEADERS, timeout=REQUEST_TIMEOUT)
                 if response.status_code == 200:
-                    return response.json()
+                    payload = response.json()
+                    return payload if isinstance(payload, dict) else None
                 if response.status_code == 404:
                     log_event(logger, "wikipedia_page_not_found",
                               source="wikipedia_provider", success=False,
@@ -219,6 +230,12 @@ class WikipediaProvider(BaseProvider):
                 continue
 
         return None
+
+    def _as_str(self, value: object) -> str:
+        return value if isinstance(value, str) else str(value or "")
+
+    def _as_dict(self, value: object) -> dict[str, object]:
+        return value if isinstance(value, dict) else {}
 
     def _compute_confidence(
         self,
