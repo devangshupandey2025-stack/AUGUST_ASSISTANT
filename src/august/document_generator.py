@@ -92,7 +92,12 @@ def research_topic(
     context: dict[str, Any] | None = None,
     memory: dict[str, Any] | None = None,
 ) -> dict[str, str] | None:
-    memory_snapshot = memory or (memory_store.snapshot() if hasattr(memory_store, "snapshot") else {})
+    if memory is not None:
+        memory_snapshot = memory
+    elif memory_store is not None and hasattr(memory_store, "snapshot"):
+        memory_snapshot = memory_store.snapshot()
+    else:
+        memory_snapshot = {}
     query = f"what is {topic}"
 
     if answer_memory is None and memory_store is not None:

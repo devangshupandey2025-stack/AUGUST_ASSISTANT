@@ -111,7 +111,7 @@ class IntentParser:
     def _strip_politeness(self, text: str) -> str:
         cleaned = text
         wake_phrase = re.escape((config.wake_phrase or "").strip().lower())
-        wake_patterns = []
+        wake_patterns: list[str] = []
         if wake_phrase:
             wake_patterns.extend(
                 (

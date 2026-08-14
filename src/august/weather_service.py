@@ -59,9 +59,14 @@ def get_weather(location: str) -> WeatherResult:
 
     # Step 1 — Geocode the location name.
     try:
+        geo_params: dict[str, str | int | float] = {
+            "name": location,
+            "count": 1,
+            "language": "en",
+        }
         geo_response = requests.get(
             OPEN_METEO_GEOCODING,
-            params={"name": location, "count": 1, "language": "en"},
+            params=geo_params,
             timeout=REQUEST_TIMEOUT,
         )
         geo_response.raise_for_status()

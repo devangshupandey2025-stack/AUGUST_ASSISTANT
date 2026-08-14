@@ -25,6 +25,13 @@ MIN_HEADING_MATCH = 0.30
 MIN_ANSWER_COVERAGE = 0.20
 
 
+def _metadata_string_list(intent: QueryIntent, key: str) -> list[str]:
+    raw_value = intent.metadata.get(key, [])
+    if not isinstance(raw_value, list):
+        return []
+    return [item for item in raw_value if isinstance(item, str)]
+
+
 # ---------------------------------------------------------------------------
 # 1. Search Result Entity Validation
 # ---------------------------------------------------------------------------
@@ -37,22 +44,22 @@ def validate_search_result(
 
     Returns ``{"valid": bool, "reason": str, "entity_overlap": float}``.
     """
-    title = getattr(result, "title", "") or ""
-    snippet = getattr(result, "snippet", "") or ""
-    href = getattr(result, "href", "") or ""
+    title = str(getattr(result, "title", "") or "")
+    snippet = str(getattr(result, "snippet", "") or "")
+    href = str(getattr(result, "href", "") or "")
     combined_text = f"{title} {snippet}"
     url_path = urlparse(href).path.lower()
 
     # --- Office-holder mandatory check ---
     # For office-holder queries, require BOTH office AND location in the result.
-    offices = intent.metadata.get("offices", []) if hasattr(intent, "metadata") else []
-    locations = intent.metadata.get("locations", []) if hasattr(intent, "metadata") else []
+    offices = _metadata_string_list(intent, "offices")
+    locations = _metadata_string_list(intent, "locations")
     if offices and locations:
         combined_lower = combined_text.lower()
         has_office = any(o.lower() in combined_lower for o in offices)
         has_location = any(loc.lower() in combined_lower for loc in locations)
         if not (has_office and has_location):
-            missing = []
+            missing: list[str] = []
             if not has_office:
                 missing.extend(offices)
             if not has_location:
@@ -125,8 +132,8 @@ def validate_article_content(
 
     required_entities = list(intent.entities or [])
     # Also include metadata entities (offices, locations) for office-holder queries.
-    offices = intent.metadata.get("offices", []) if hasattr(intent, "metadata") else []
-    locations = intent.metadata.get("locations", []) if hasattr(intent, "metadata") else []
+    offices = _metadata_string_list(intent, "offices")
+    locations = _metadata_string_list(intent, "locations")
     for item in offices + locations:
         if item not in required_entities:
             required_entities.append(item)
@@ -194,8 +201,8 @@ def verify_answer_relevance(
     text_lower = article_text.lower()
     required_entities = [e.lower() for e in (intent.entities or [])]
     # Also include metadata entities for office-holder queries.
-    offices = intent.metadata.get("offices", []) if hasattr(intent, "metadata") else []
-    locations = intent.metadata.get("locations", []) if hasattr(intent, "metadata") else []
+    offices = _metadata_string_list(intent, "offices")
+    locations = _metadata_string_list(intent, "locations")
     for item in offices + locations:
         item_lower = item.lower()
         if item_lower not in required_entities:
@@ -268,7 +275,7 @@ def _text_has_factual_answer(text: str, intent: QueryIntent) -> bool:
     text_lower = text.lower()
 
     # For office holder queries: look for "is [Name]" pattern near office title.
-    offices = intent.metadata.get("offices", []) if hasattr(intent, "metadata") else []
+    offices = _metadata_string_list(intent, "offices")
     if offices:
         for office in offices:
             pattern = rf"{office.lower()}\s+(?:of\s+\w+\s+)?(?:is|was)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)"

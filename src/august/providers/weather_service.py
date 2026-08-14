@@ -118,9 +118,15 @@ class WeatherService:
     # ------------------------------------------------------------------
     def _geocode(self, location: str) -> tuple[float, float, str] | None:
         try:
+            geo_params: dict[str, str | int | float] = {
+                "name": location,
+                "count": 5,
+                "language": "en",
+                "format": "json",
+            }
             response = requests.get(
                 OPEN_METEO_GEOCODING,
-                params={"name": location, "count": 5, "language": "en", "format": "json"},
+                params=geo_params,
                 timeout=REQUEST_TIMEOUT,
             )
             response.raise_for_status()
@@ -154,7 +160,7 @@ class WeatherService:
     # Weather API
     # ------------------------------------------------------------------
     def _fetch_weather(self, lat: float, lon: float) -> dict | None:
-        params = {
+        params: dict[str, str | int | float] = {
             "latitude": lat,
             "longitude": lon,
             "current": "temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m",

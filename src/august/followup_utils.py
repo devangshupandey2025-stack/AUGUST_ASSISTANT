@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Shared helpers for identifying short conversational follow-up phrases."""
+
+from __future__ import annotations
 
 import re
 

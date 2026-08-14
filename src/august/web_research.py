@@ -12,15 +12,35 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import Iterable, Protocol, TypedDict, cast
 from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
+
+class _DDGSResult(TypedDict, total=False):
+    title: str
+    href: str
+    body: str
+
+
+class _DDGSSession(Protocol):
+    def __enter__(self) -> "_DDGSSession": ...
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None: ...
+    def text(self, query: str, max_results: int = 5) -> Iterable[_DDGSResult]: ...
+
+
+class _DDGSFactory(Protocol):
+    def __call__(self, *, headers: dict[str, str], timeout: int) -> _DDGSSession: ...
+
+
+DDGS: _DDGSFactory | None = None
 try:
-    from duckduckgo_search import DDGS
+    from duckduckgo_search import DDGS as _ImportedDDGS
+    DDGS = cast(_DDGSFactory, _ImportedDDGS)
 except Exception:  # pragma: no cover
-    DDGS = None  # type: ignore[assignment]
+    pass
 
 try:
     from newspaper import Article
@@ -32,24 +52,24 @@ try:
 except Exception:  # pragma: no cover
     Document = None  # type: ignore[assignment]
 
-from august.acronym_resolver import expand_acronyms
-from august.consensus import build_consensus
-from august.providers.provider_router import ProviderRouter
-from august.query_normalizer import normalize_query
-from august.query_understanding import understand_query
-from august.result_filter import filter_results
-from august.result_validator import (
+from august.acronym_resolver import expand_acronyms  # noqa: E402
+from august.consensus import build_consensus  # noqa: E402
+from august.providers.provider_router import ProviderRouter  # noqa: E402
+from august.query_normalizer import normalize_query  # noqa: E402
+from august.query_understanding import understand_query  # noqa: E402
+from august.result_filter import filter_results  # noqa: E402
+from august.result_validator import (  # noqa: E402
     validate_article_content,
     validate_search_result,
     verify_answer_relevance,
-)
-from august.retrieval_confidence import assess_retrieval_confidence
-from august.search_synthesizer import (
+)  # noqa: E402
+from august.retrieval_confidence import assess_retrieval_confidence  # noqa: E402
+from august.search_synthesizer import (  # noqa: E402
     get_deprioritized_domains,
     get_preferred_domains,
     synthesize_search_query,
-)
-from august.utils.logger import get_logger, log_event
+)  # noqa: E402
+from august.utils.logger import get_logger, log_event  # noqa: E402
 
 logger = get_logger("WebResearch")
 
@@ -211,7 +231,9 @@ def _patch_ddgs_timedelta_logging() -> None:
             raise ddg_async.RatelimitException(f"{resp.url} {resp.status_code} Ratelimit")
         raise ddg_async.DuckDuckGoSearchException(f"{resp.url} return None. {params=} {data=}")
 
-    ddg_async.AsyncDDGS._aget_url = _aget_url
+    # The patch is intentional: duckduckgo_search exposes this method on the
+    # third-party class, but its stubs do not model runtime monkey-patching.
+    ddg_async.AsyncDDGS._aget_url = _aget_url  # type: ignore[method-assign]
     _DDGS_TIMING_PATCHED = True
 
 
@@ -661,7 +683,7 @@ class WebResearchEngine:
                     extractor_quality=extractor_quality,
                     domain_relevance=self._domain_relevance_for_intent(result.href, preferred_domains),
                 )
-                retrieval_confidence_value = float(retrieval_conf.get("confidence", 0.0))
+                retrieval_confidence_value = self._as_float(retrieval_conf.get("confidence", 0.0), 0.0)
                 confidence = max(legacy_confidence, retrieval_confidence_value)
 
                 log_event(logger, "retrieval_confidence_assigned", source="web_research", success=True,
@@ -707,9 +729,8 @@ class WebResearchEngine:
             source_urls = [str(ext["source_url"]) for ext in valid_extractions]
 
             # Use the best source as primary for metadata.
-            best = max(valid_extractions, key=lambda x: float(x["confidence"]))
-            confidence = float(best["confidence"])
-            primary_result = best["result"]
+            best = max(valid_extractions, key=lambda x: self._as_float(x["confidence"], 0.0))
+            confidence = self._as_float(best["confidence"], 0.0)
             article_text = str(best["article_text"])
 
             # Optional: Gemini polish (only if available, never blocking).
@@ -1105,10 +1126,14 @@ class WebResearchEngine:
         return cleaned.replace(" ,", ",").replace(" .", ".")
 
     def _as_float(self, value: object, default: float) -> float:
-        try:
+        if isinstance(value, (int, float)):
             return float(value)
-        except (TypeError, ValueError):
-            return default
+        if isinstance(value, str):
+            try:
+                return float(value)
+            except ValueError:
+                return default
+        return default
 
     def _with_source_attribution(self, answer: str, source_url: str) -> str:
         parsed = urlparse(source_url)
@@ -1125,19 +1150,21 @@ class WebResearchEngine:
         cached = _RESEARCH_CACHE.get(cache_key)
         if not cached:
             return None
-        timestamp = float(cached.get("timestamp", 0.0) or 0.0)
+        timestamp = self._as_float(cached.get("timestamp", 0.0), 0.0)
         if time.time() - timestamp > WEB_CACHE_TTL:
             _RESEARCH_CACHE.pop(cache_key, None)
             return None
         log_event(logger, "research_cache_hit", source="web_research", success=True, query=cache_key)
+        source_urls_value = cached.get("source_urls")
+        source_urls = [str(value) for value in source_urls_value] if isinstance(source_urls_value, list) else []
         return WebResearchResult(
             success=True,
             answer=str(cached.get("answer", "") or FAILURE_MESSAGE),
             source_url=str(cached.get("source_url", "") or ""),
             title=str(cached.get("title", "") or ""),
             article_text=str(cached.get("article_text", "") or ""),
-            source_urls=list(cached.get("source_urls", []) or []),
-            confidence=float(cached.get("confidence", 0.8) or 0.8),
+            source_urls=source_urls,
+            confidence=self._as_float(cached.get("confidence", 0.8), 0.8),
         )
 
     def _set_cached(self, cache_key: str, answer: str, source_url: str, title: str, article_text: str, confidence: float = 0.8) -> None:
