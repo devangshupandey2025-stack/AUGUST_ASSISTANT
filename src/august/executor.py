@@ -14,13 +14,14 @@ from AppOpener import open as open_app_fallback
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 
-from answer_memory import AnswerMemory
-from document_generator import generate_document
-from intent_parser import CommandPlan, ParsedCommand
-from modules.calendar_module import fetch_todays_events
-from system_intents import formatted_date, formatted_time
-from utils.logger import get_logger, log_event
-from web_research import FAILURE_MESSAGE, research as research_web
+from august.answer_memory import AnswerMemory
+from august.document_generator import generate_document
+from august.intent_parser import CommandPlan, ParsedCommand
+from august.modules.calendar_module import fetch_todays_events
+from august.system_intents import formatted_date, formatted_time
+from august.utils.logger import get_logger, log_event
+from august.web_research import FAILURE_MESSAGE
+from august.web_research import research as research_web
 
 logger = get_logger("Executor")
 
@@ -130,7 +131,7 @@ class Executor:
                 return launched
             logger.warning("Registry path launch failed for '%s', continuing with legacy fallbacks", app_name)
 
-        from config import config
+        from august.config import config
 
         app_config = config.get_app_config(app_name)
         if app_config and app_config.path:
@@ -157,7 +158,7 @@ class Executor:
 
     def _close_app(self, command: ParsedCommand) -> ExecutionResult:
         app_name = command.payload["app"]
-        from config import config
+        from august.config import config
 
         app_config = config.get_app_config(app_name)
         process_name = (app_config.process_name if app_config else "") or self._guess_process_name(app_name)
@@ -234,7 +235,7 @@ class Executor:
         # --- Confidence-gated memory storage ---
         research_confidence = getattr(result, "confidence", 0.88) or 0.88
         if self.memory_store is not None:
-            from knowledge_governor import KnowledgeGovernor
+            from august.knowledge_governor import KnowledgeGovernor
             governor = KnowledgeGovernor()
             if governor.should_store_research(query, result.answer, research_confidence):
                 AnswerMemory(memory_store=self.memory_store).store(query, result.answer, confidence=min(research_confidence, 0.88), source="verified_web")

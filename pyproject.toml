@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "august-assistant"
+version = "0.1.0"
+description = "A personal JARVIS-style AI assistant"
+requires-python = ">=3.10"
+
+dependencies = [
+    "SpeechRecognition==3.10.1",
+    "pyttsx3==2.90",
+    "PyAudio==0.2.14",
+    "requests==2.33.1",
+    "beautifulsoup4==4.12.3",
+    "duckduckgo-search==5.3.1",
+    "readability-lxml==0.8.1",
+    "newspaper3k==0.2.8",
+    "wmi==1.5.1",
+    "screen-brightness-control==0.24.1",
+    "pycaw==20230407",
+    "google-api-python-client==2.115.0",
+    "google-auth-httplib2==0.2.0",
+    "google-auth-oauthlib==1.2.0",
+    "comtypes==1.4.1",
+    "python-dateutil==2.9.0.post0",
+    "fuzzywuzzy==0.18.0",
+    "python-Levenshtein==0.25.0",
+    "AppOpener==1.7",
+    "python-docx==1.1.2",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]

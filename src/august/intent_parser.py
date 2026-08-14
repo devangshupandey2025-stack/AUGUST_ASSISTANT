@@ -4,8 +4,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from config import config
-from utils.logger import get_logger
+from august.config import config
+from august.utils.logger import get_logger
 
 logger = get_logger("IntentParser")
 

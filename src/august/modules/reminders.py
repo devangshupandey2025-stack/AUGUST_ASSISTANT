@@ -2,10 +2,10 @@ import json
 import os
 import threading
 import time
-from datetime import datetime
-from utils.logger import get_logger
-from core.tts import speak
-from config import config
+
+from august.config import config
+from august.core.tts import speak
+from august.utils.logger import get_logger
 
 logger = get_logger("Reminders")
 
@@ -50,8 +50,10 @@ class ReminderSystem:
             value = int(match.group(1))
             unit = match.group(2)
             seconds = value
-            if 'minute' in unit: seconds = value * 60
-            elif 'hour' in unit: seconds = value * 3600
+            if 'minute' in unit: 
+                seconds = value * 60
+            elif 'hour' in unit: 
+                seconds = value * 3600
             
             task = text.replace("remind me to", "").replace("set a reminder to", "").strip()
             task = re.sub(r"in\s+(\d+)\s+(minute|minutes|hour|hours|second|seconds)", "", task).strip()

@@ -6,12 +6,11 @@ scraping fragile HTML pages. Falls back gracefully if the API is unreachable.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 import requests
 
-from utils.logger import get_logger, log_event
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("WeatherService")
 

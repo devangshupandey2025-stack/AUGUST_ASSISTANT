@@ -1,21 +1,8 @@
 # Jarvis Assistant – Full Code (Part 1/5)
 import os
-import sys
-import json
-import queue
-import threading
-import subprocess
-import webbrowser
-import time
-import shlex
-import base64
 
-import sounddevice as sd
-from vosk import Model, KaldiRecognizer
-import pyttsx3
-import pyautogui
-import keyboard
 import google.generativeai as genai
+import pyttsx3
 
 # ---------------- CONFIG ----------------
 STT_MODE = "gemini"

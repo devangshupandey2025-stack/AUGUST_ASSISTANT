@@ -1,13 +1,15 @@
 import datetime
 import os.path
+
 from dateutil import parser as date_parser
 from google.auth.exceptions import RefreshError
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
-from config import config
-from utils.logger import get_logger
+
+from august.config import config
+from august.utils.logger import get_logger
 
 logger = get_logger("Calendar")
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30), name="IST")

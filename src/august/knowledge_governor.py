@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
 import re
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from entity_guard import entities_conflict, extract_entities, merge_entities
-from sanity_validator import validate_query_sanity
-from utils.logger import get_logger, log_event
+from august.entity_guard import entities_conflict, extract_entities, merge_entities
+from august.sanity_validator import validate_query_sanity
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("KnowledgeGovernor")
 

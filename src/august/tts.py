@@ -5,9 +5,9 @@ import time
 
 import pyttsx3
 
-from config import config
-from personality_engine import personality_engine
-from utils.logger import get_logger
+from august.config import config
+from august.personality_engine import personality_engine
+from august.utils.logger import get_logger
 
 logger = get_logger("TTS")
 

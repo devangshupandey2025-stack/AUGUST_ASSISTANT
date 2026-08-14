@@ -5,10 +5,10 @@ import re
 from collections import deque
 from typing import Any
 
-from config import config
-from followup_utils import is_follow_up_query
-from knowledge_governor import KnowledgeGovernor
-from utils.logger import get_logger, log_event
+from august.config import config
+from august.followup_utils import is_follow_up_query
+from august.knowledge_governor import KnowledgeGovernor
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("Context")
 IST = datetime.timezone(datetime.timedelta(hours=5, minutes=30), name="IST")

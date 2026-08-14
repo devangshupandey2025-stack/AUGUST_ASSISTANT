@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from utils.logger import get_logger
+from august.utils.logger import get_logger
 
 logger = get_logger("Config")
 CONFIG_FILE = Path("config.json")

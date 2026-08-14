@@ -1,10 +1,12 @@
 import os
+from ctypes import POINTER, cast
+
 import screen_brightness_control as sbc
-from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-from ctypes import cast, POINTER
 from comtypes import CLSCTX_ALL
-from utils.logger import get_logger
-from core.tts import speak
+from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+
+from august.core.tts import speak
+from august.utils.logger import get_logger
 
 logger = get_logger("SystemControls")
 

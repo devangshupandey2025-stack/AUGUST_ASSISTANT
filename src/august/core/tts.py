@@ -1,5 +1,6 @@
 import pyttsx3
-from utils.logger import get_logger
+
+from august.utils.logger import get_logger
 
 logger = get_logger("TTS")
 

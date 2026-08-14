@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import Mock, patch, MagicMock, ANY
 from datetime import date
+from unittest.mock import MagicMock, Mock, patch
 
 import requests
 
-from query_understanding import QueryIntent
-from providers.provider_result import ProviderResult
-from providers.weather_service import WeatherService, WeatherData
-from providers.weather_provider import WeatherProvider
-from providers.provider_router import ProviderRouter, AVAILABLE_PROVIDERS
-from providers.utils import extract_location, is_weather_query
+from august.providers.provider_router import AVAILABLE_PROVIDERS, ProviderRouter
+from august.providers.utils import extract_location, is_weather_query
+from august.providers.weather_provider import WeatherProvider
+from august.providers.weather_service import WeatherData, WeatherService
+from august.query_understanding import QueryIntent
 
 
 def _make_intent(
@@ -114,7 +113,7 @@ class WeatherServiceGeocodeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.service = WeatherService()
 
-    @patch("providers.weather_service.requests.get")
+    @patch("august.providers.weather_service.requests.get")
     def test_geocode_success(self, mock_get: MagicMock) -> None:
         mock_response = Mock()
         mock_response.status_code = 200
@@ -133,13 +132,13 @@ class WeatherServiceGeocodeTests(unittest.TestCase):
         self.assertAlmostEqual(lon, 88.3639)
         self.assertEqual(name, "Kolkata")
 
-    @patch("providers.weather_service.requests.get")
+    @patch("august.providers.weather_service.requests.get")
     def test_geocode_http_error(self, mock_get: MagicMock) -> None:
         mock_get.side_effect = requests.exceptions.ConnectionError("API down")
         result = self.service._geocode("Kolkata")
         self.assertIsNone(result)
 
-    @patch("providers.weather_service.requests.get")
+    @patch("august.providers.weather_service.requests.get")
     def test_geocode_empty_results(self, mock_get: MagicMock) -> None:
         mock_response = Mock()
         mock_response.status_code = 200
@@ -148,7 +147,7 @@ class WeatherServiceGeocodeTests(unittest.TestCase):
         result = self.service._geocode("UnknownCityXYZ")
         self.assertIsNone(result)
 
-    @patch("providers.weather_service.requests.get")
+    @patch("august.providers.weather_service.requests.get")
     def test_geocode_selects_highest_population(self, mock_get: MagicMock) -> None:
         mock_response = Mock()
         mock_response.status_code = 200
@@ -175,7 +174,7 @@ class WeatherServiceFetchTests(unittest.TestCase):
     def setUp(self) -> None:
         self.service = WeatherService()
 
-    @patch("providers.weather_service.requests.get")
+    @patch("august.providers.weather_service.requests.get")
     def test_fetch_weather_success(self, mock_get: MagicMock) -> None:
         mock_response = Mock()
         mock_response.status_code = 200
@@ -198,13 +197,13 @@ class WeatherServiceFetchTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["current"]["temperature_2m"], 31.0)
 
-    @patch("providers.weather_service.requests.get")
+    @patch("august.providers.weather_service.requests.get")
     def test_fetch_weather_http_error(self, mock_get: MagicMock) -> None:
         mock_get.side_effect = requests.exceptions.Timeout("timeout")
         result = self.service._fetch_weather(22.5726, 88.3639)
         self.assertIsNone(result)
 
-    @patch("providers.weather_service.requests.get")
+    @patch("august.providers.weather_service.requests.get")
     def test_fetch_weather_parse_error(self, mock_get: MagicMock) -> None:
         mock_response = Mock()
         mock_response.status_code = 200
@@ -221,7 +220,7 @@ class WeatherServiceGetWeatherTests(unittest.TestCase):
     def setUp(self) -> None:
         self.service = WeatherService()
 
-    @patch("providers.weather_service.requests.get")
+    @patch("august.providers.weather_service.requests.get")
     def test_get_weather_success(self, mock_get: MagicMock) -> None:
         geo_response = Mock()
         geo_response.status_code = 200
@@ -264,13 +263,13 @@ class WeatherServiceGetWeatherTests(unittest.TestCase):
         self.assertEqual(result.structured.get("temperature"), 31.0)
         self.assertEqual(result.structured.get("condition"), "Partly cloudy")
 
-    @patch("providers.weather_service.requests.get")
+    @patch("august.providers.weather_service.requests.get")
     def test_get_weather_geocode_failure(self, mock_get: MagicMock) -> None:
         mock_get.side_effect = requests.exceptions.ConnectionError("API down")
         result = self.service.get_weather("UnknownCity")
         self.assertFalse(result.success)
 
-    @patch("providers.weather_service.requests.get")
+    @patch("august.providers.weather_service.requests.get")
     def test_get_weather_weather_api_failure(self, mock_get: MagicMock) -> None:
         geo_response = Mock()
         geo_response.status_code = 200
@@ -565,7 +564,7 @@ class WeatherProviderRouterTests(unittest.TestCase):
             metadata={"topic_category": "technology"},
         )
 
-        with patch("providers.wikipedia_provider.requests.get") as mock_get:
+        with patch("august.providers.wikipedia_provider.requests.get") as mock_get:
             search_resp = Mock()
             search_resp.status_code = 200
             search_resp.json.return_value = {
@@ -593,7 +592,7 @@ class WeatherProviderRouterTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 class WeatherProviderIntegrationTests(unittest.TestCase):
     def test_weather_query_handled_by_weather_provider(self) -> None:
-        from web_research import WebResearchEngine
+        from august.web_research import WebResearchEngine
 
         engine = WebResearchEngine()
         intent = _make_intent(
@@ -624,7 +623,7 @@ class WeatherProviderIntegrationTests(unittest.TestCase):
             entities=["Polymorphism"],
         )
 
-        with patch("providers.wikipedia_provider.requests.get") as mock_get:
+        with patch("august.providers.wikipedia_provider.requests.get") as mock_get:
             search_resp = Mock()
             search_resp.status_code = 200
             search_resp.json.return_value = {

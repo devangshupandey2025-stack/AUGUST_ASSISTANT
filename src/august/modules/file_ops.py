@@ -1,7 +1,8 @@
 import os
-from config import config
-from utils.logger import get_logger
-from core.tts import speak
+
+from august.config import config
+from august.core.tts import speak
+from august.utils.logger import get_logger
 
 logger = get_logger("FileOps")
 

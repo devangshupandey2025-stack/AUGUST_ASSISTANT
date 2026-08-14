@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import pytest
 
-from query_understanding import understand_query, QueryIntent
-from query_normalizer import normalize_query
-from search_synthesizer import synthesize_search_query, get_preferred_domains, get_deprioritized_domains
-from result_filter import filter_results, _is_irrelevant_result, _extract_domain
-from retrieval_confidence import assess_retrieval_confidence
+from august.query_normalizer import normalize_query
+from august.query_understanding import QueryIntent, understand_query
+from august.result_filter import _extract_domain, _is_irrelevant_result, filter_results
+from august.retrieval_confidence import assess_retrieval_confidence
+from august.search_synthesizer import (
+    get_deprioritized_domains,
+    get_preferred_domains,
+    synthesize_search_query,
+)
 
 
 # ---------------------------------------------------------------------------

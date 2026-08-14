@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date
 
 import requests
 
-from utils.logger import get_logger, log_event
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("WeatherService")
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime
 import unittest
 
-from modules.calendar_module import IST, fetch_todays_events
+from august.modules.calendar_module import IST, fetch_todays_events
 
 
 class FakeCalendarList:

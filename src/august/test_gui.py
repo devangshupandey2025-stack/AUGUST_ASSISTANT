@@ -22,13 +22,13 @@ Run:
 --------------------------------------------------------------------
 """
 
-import tkinter as tk
-from tkinter import font as tkfont
-import math
 import datetime
+import math
 import random
 import threading
+import tkinter as tk
 import webbrowser
+from tkinter import font as tkfont
 
 # ----------------------------------------------------------------------
 # Optional voice engines (loaded lazily / safely so the GUI never crashes
@@ -327,7 +327,7 @@ class JarvisGUI:
                     audio = recognizer.listen(source, timeout=5, phrase_time_limit=6)
                 text = recognizer.recognize_google(audio)
                 self.root.after(0, lambda: self.handle_command(text))
-            except Exception as e:
+            except Exception:
                 self.root.after(0, lambda: self.log(f"Voice error: {e}"))
             finally:
                 self.listening = False

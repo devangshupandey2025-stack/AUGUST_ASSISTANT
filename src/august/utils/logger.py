@@ -1,6 +1,6 @@
+import json
 import logging
 import os
-import json
 from logging.handlers import RotatingFileHandler
 
 LOG_DIR = "logs"

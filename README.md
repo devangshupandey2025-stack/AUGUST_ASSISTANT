@@ -16,7 +16,7 @@ Highlights / Features
 - Rule-based and AI-backed intent parsing
 - Provider interface for external data (weather, wikipedia, etc.)
 - Scheduler and reminders
-- Modular structure: core, modules, providers, utils (now under `src/porcupine_ai`)
+- Modular structure: core, modules, providers, utils (under `src/august`)
 
 Repository layout
 -----------------
@@ -67,11 +67,11 @@ Headless run
 ------------
 To run without the GUI (e.g., for server or testing), import and invoke VoiceAssistant.run() from an alternate runner script that avoids GUI monkey-patching. Example:
 
-   from src.august.main import VoiceAssistant
+   from main import VoiceAssistant
    assistant = VoiceAssistant()
    assistant.run()
 
-Note: main.py currently inserts `src/august` on sys.path so legacy bare imports keep working. Long-term prefer explicit package imports (e.g., `from august.listener import Listener`).
+Note: `main.py` inserts `src` on `sys.path`, and modules are imported via `august.*`.
 
 Testing
 -------
@@ -84,7 +84,7 @@ Some tests hit provider code; for reliable CI, mock external calls or set networ
 
 Development notes
 -----------------
-- Code was reorganized into `src/porcupine_ai` for packaging. The repo still supports running `main.py` from root due to a bootstrap sys.path insertion.
+- Code is organized under `src/august` and supports running `main.py` from the repository root.
 - Recommended next steps:
   - Convert imports to explicit package imports and add a `pyproject.toml` for packaging.
   - Add pre-commit hooks (ruff/black/isort) and CI (GitHub Actions) to run tests and linters on PRs.
@@ -110,7 +110,7 @@ CI / Packaging recommendations
 Troubleshooting
 ---------------
 - Push failures on Windows due to credential helper: configure Git Credential Manager (manager-core) or push with a PAT. See https://aka.ms/gcm/credstores
-- If imports fail after re-org: ensure `PYTHONPATH` includes repo root or run `python main.py` from repo root (main.py bootstraps src path).
+- If imports fail after re-org: ensure `PYTHONPATH` includes `src`, or run `python main.py` from repo root (main.py bootstraps `src`).
 
 Contributing
 ------------

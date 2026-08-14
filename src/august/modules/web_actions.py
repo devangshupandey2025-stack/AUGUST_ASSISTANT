@@ -1,7 +1,8 @@
 import webbrowser
-from utils.logger import get_logger
-from core.tts import speak
 from urllib.parse import quote_plus
+
+from august.core.tts import speak
+from august.utils.logger import get_logger
 
 logger = get_logger("WebActions")
 

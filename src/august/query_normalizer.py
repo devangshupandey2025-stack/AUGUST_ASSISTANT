@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import re
 
-from query_understanding import QueryIntent, ENTITY_ALIASES
-from acronym_resolver import expand_acronyms
-from utils.logger import get_logger, log_event
+from august.acronym_resolver import expand_acronyms
+from august.query_understanding import ENTITY_ALIASES, QueryIntent
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("QueryNormalizer")
 

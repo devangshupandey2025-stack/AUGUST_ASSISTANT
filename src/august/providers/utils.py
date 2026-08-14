@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import re
-from typing import Sequence
 
-from query_understanding import QueryIntent
-
+from august.query_understanding import QueryIntent
 
 _WEATHER_KEYWORDS: frozenset[str] = frozenset({
     "weather", "forecast", "temperature", "temp", "rain", "humidity",

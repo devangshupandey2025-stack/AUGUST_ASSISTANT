@@ -1,7 +1,9 @@
-from AppOpener import open as open_app_cmd, close as close_app_cmd
-from utils.logger import get_logger
-from core.tts import speak
-from config import config
+from AppOpener import close as close_app_cmd
+from AppOpener import open as open_app_cmd
+
+from august.config import config
+from august.core.tts import speak
+from august.utils.logger import get_logger
 
 logger = get_logger("AppControl")
 

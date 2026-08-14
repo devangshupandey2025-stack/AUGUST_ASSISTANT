@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from utils.logger import get_logger, log_event
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("AcronymResolver")
 

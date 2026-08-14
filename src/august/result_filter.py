@@ -11,9 +11,9 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
-from query_understanding import QueryIntent
-from search_synthesizer import get_deprioritized_domains
-from utils.logger import get_logger, log_event
+from august.query_understanding import QueryIntent
+from august.search_synthesizer import get_deprioritized_domains
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("ResultFilter")
 

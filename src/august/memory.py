@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from config import config
-from utils.logger import get_logger
+from august.config import config
+from august.utils.logger import get_logger
 
 logger = get_logger("Memory")
 MEMORY_FILE = Path(config.files.get("memory", "memory.json"))

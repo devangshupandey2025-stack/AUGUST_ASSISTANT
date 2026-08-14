@@ -6,9 +6,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from answer_fallback import try_local_answer
-from answer_memory import AnswerMemory
-from utils.logger import get_logger, log_event
+from august.answer_fallback import try_local_answer
+from august.answer_memory import AnswerMemory
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("DocumentGenerator")
 
