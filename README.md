@@ -132,4 +132,3 @@ If you want, the next automation steps I can take:
 Acknowledgements
 ----------------
 - Generated/organized by a development assistant. Sensitive files were not included in this README.
-
