@@ -1,14 +1,14 @@
-import os
-import time
+import platform
 import queue
+import subprocess
+import time
+import webbrowser
+
 import numpy as np
+import pyautogui
+import pyttsx3
 import sounddevice as sd
 import whisper
-import pyttsx3
-import pyautogui
-import subprocess
-import webbrowser
-import platform
 
 # ------------------- SETTINGS -------------------
 WHISPER_MODEL = "small"     # tiny / base / small / medium

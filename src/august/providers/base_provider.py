@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from query_understanding import QueryIntent
-
-from providers.provider_result import ProviderResult
+from august.providers.provider_result import ProviderResult
+from august.query_understanding import QueryIntent
 
 
 class BaseProvider(ABC):

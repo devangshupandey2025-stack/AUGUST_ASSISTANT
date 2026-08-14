@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-
 INDIAN_STATES = {
     "andhra pradesh",
     "arunachal pradesh",

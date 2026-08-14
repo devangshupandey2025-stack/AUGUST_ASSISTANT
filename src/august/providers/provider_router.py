@@ -7,12 +7,12 @@ research.
 
 from __future__ import annotations
 
-from query_understanding import QueryIntent
-from providers.base_provider import BaseProvider
-from providers.provider_result import ProviderResult
-from providers.wikipedia_provider import WikipediaProvider
-from providers.weather_provider import WeatherProvider
-from utils.logger import get_logger, log_event
+from august.providers.base_provider import BaseProvider
+from august.providers.provider_result import ProviderResult
+from august.providers.weather_provider import WeatherProvider
+from august.providers.wikipedia_provider import WikipediaProvider
+from august.query_understanding import QueryIntent
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("ProviderRouter")
 

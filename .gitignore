@@ -1,28 +1,40 @@
-# Python caches and bytecode
 __pycache__/
 *.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.coverage
+.coverage.*
+htmlcov/
 
-# Virtual environments
 .venv/
 venv/
 env/
+ENV/
 
-# Logs and runtime artifacts
 logs/
 *.log
 
-# Local config and secrets
+app_registry_cache.json
+memory.json
+reminders.json
+TEST_OUTPUTS/
+.omo/run-continuation/
+
 .env
 .env.*
+!.env.example
 credentials.json
 token.json
 config.json
+config.local.json
 
-# Local state/data (avoid pushing personal runtime data)
-memory.json
-reminders.json
+.vscode/
+.idea/
 
-# OS/editor files
 .DS_Store
 Thumbs.db
-.vscode/
+
+*.egg-info/

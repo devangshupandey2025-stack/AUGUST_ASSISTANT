@@ -9,16 +9,16 @@ from unittest.mock import Mock, patch
 
 import requests
 
-from app_registry import AppRegistry
-from ai_parser import AIParser, AnswerResult
-from answer_memory import AnswerMemory
-from context_engine import ContextEngine, IST
-from decision_engine import DecisionEngine
-from document_generator import generate_document
-from executor import Executor
-from intent_parser import CommandPlan, ParsedCommand
-from memory import MemoryStore
-from personality_engine import PersonalityEngine
+from august.ai_parser import AIParser, AnswerResult
+from august.answer_memory import AnswerMemory
+from august.app_registry import AppRegistry
+from august.context_engine import IST, ContextEngine
+from august.decision_engine import DecisionEngine
+from august.document_generator import generate_document
+from august.executor import Executor
+from august.intent_parser import CommandPlan, ParsedCommand
+from august.memory import MemoryStore
+from august.personality_engine import PersonalityEngine
 
 
 class DummyAIParser:
@@ -746,7 +746,7 @@ class DecisionEngineTests(unittest.TestCase):
             confidence=0.88,
         )
 
-        with patch("executor.research_web", return_value=fake_result):
+        with patch("august.executor.research_web", return_value=fake_result):
             result = executor.execute(ParsedCommand(action="web_research", payload={"query": "what is quantum computing"}))
 
         self.assertTrue(result.success)
@@ -915,7 +915,7 @@ class AIParserTests(unittest.TestCase):
         error = requests.HTTPError("rate limited")
         error.response = error_response
 
-        with patch("ai_parser.requests.post", side_effect=error), patch("ai_parser.time.sleep", return_value=None), self.assertLogs("AIParser", level="INFO") as logs:
+        with patch("august.ai_parser.requests.post", side_effect=error), patch("august.ai_parser.time.sleep", return_value=None), self.assertLogs("AIParser", level="INFO") as logs:
             result = parser.try_ai_answer("what is recursion", context={}, memory={})
 
         joined_logs = "\n".join(logs.output)
@@ -931,7 +931,7 @@ class AIParserTests(unittest.TestCase):
 
 class WebResearchTests(unittest.TestCase):
     def test_web_research_cache_hit_skips_second_search(self) -> None:
-        from web_research import WebResearchEngine
+        from august.web_research import WebResearchEngine
 
         engine = WebResearchEngine()
         article_text = (
@@ -957,7 +957,8 @@ class WebResearchTests(unittest.TestCase):
 
     def test_transport_error_timedelta_is_stringified_safely(self) -> None:
         from datetime import timedelta
-        from web_research import WebResearchEngine
+
+        from august.web_research import WebResearchEngine
 
         engine = WebResearchEngine()
         class TimedeltaError(Exception):
@@ -970,7 +971,7 @@ class OfficeHolderRetrievalTests(unittest.TestCase):
     """Tests for the office-holder retrieval fix (V5.6.1)."""
 
     def test_entity_extraction_includes_office_and_location(self) -> None:
-        from query_understanding import understand_query
+        from august.query_understanding import understand_query
 
         intent = understand_query("who is the current chief minister of west bengal")
         self.assertIn("Chief Minister", intent.entities)
@@ -981,38 +982,38 @@ class OfficeHolderRetrievalTests(unittest.TestCase):
         self.assertEqual(intent.metadata.get("time_relevance"), "dynamic")
 
     def test_entity_extraction_prime_minister(self) -> None:
-        from query_understanding import understand_query
+        from august.query_understanding import understand_query
 
         intent = understand_query("who is the prime minister of india")
         self.assertIn("Prime Minister", intent.entities)
         self.assertIn("India", intent.entities)
 
     def test_entity_extraction_president(self) -> None:
-        from query_understanding import understand_query
+        from august.query_understanding import understand_query
 
         intent = understand_query("current president of the united states")
         self.assertIn("President", intent.entities)
         self.assertIn("United States", intent.entities)
 
     def test_search_synthesis_office_holder_with_official(self) -> None:
-        from query_understanding import understand_query
-        from search_synthesizer import synthesize_search_query
+        from august.query_understanding import understand_query
+        from august.search_synthesizer import synthesize_search_query
 
         intent = understand_query("who is the current chief minister of west bengal")
         query = synthesize_search_query(intent, "who is the current chief minister of west bengal")
         self.assertEqual(query, "Current Chief Minister of West Bengal official")
 
     def test_search_synthesis_prime_minister(self) -> None:
-        from query_understanding import understand_query
-        from search_synthesizer import synthesize_search_query
+        from august.query_understanding import understand_query
+        from august.search_synthesizer import synthesize_search_query
 
         intent = understand_query("who is the prime minister of india")
         query = synthesize_search_query(intent, "who is the prime minister of india")
         self.assertEqual(query, "Current Prime Minister of India official")
 
     def test_entity_validation_rejects_electric_current(self) -> None:
-        from query_understanding import understand_query
-        from result_validator import validate_search_result
+        from august.query_understanding import understand_query
+        from august.result_validator import validate_search_result
 
         intent = understand_query("who is the current chief minister of west bengal")
         # Simulate a search result about "Electric Current"
@@ -1026,8 +1027,8 @@ class OfficeHolderRetrievalTests(unittest.TestCase):
         self.assertIn("missing_office_or_location", result["reason"])
 
     def test_entity_validation_passes_correct_result(self) -> None:
-        from query_understanding import understand_query
-        from result_validator import validate_search_result
+        from august.query_understanding import understand_query
+        from august.result_validator import validate_search_result
 
         intent = understand_query("who is the current chief minister of west bengal")
         fake_result = Mock(
@@ -1039,8 +1040,8 @@ class OfficeHolderRetrievalTests(unittest.TestCase):
         self.assertTrue(result["valid"])
 
     def test_entity_validation_rejects_missing_location(self) -> None:
-        from query_understanding import understand_query
-        from result_validator import validate_search_result
+        from august.query_understanding import understand_query
+        from august.result_validator import validate_search_result
 
         intent = understand_query("who is the current chief minister of west bengal")
         # Has office but no location
@@ -1053,9 +1054,9 @@ class OfficeHolderRetrievalTests(unittest.TestCase):
         self.assertFalse(result["valid"])
 
     def test_hard_rejection_physics_title_for_office_query(self) -> None:
-        from query_understanding import understand_query
-        from result_filter import filter_results
-        from search_synthesizer import get_preferred_domains
+        from august.query_understanding import understand_query
+        from august.result_filter import filter_results
+        from august.search_synthesizer import get_preferred_domains
 
         intent = understand_query("who is the current chief minister of west bengal")
         physics_result = Mock(
@@ -1068,9 +1069,9 @@ class OfficeHolderRetrievalTests(unittest.TestCase):
         self.assertEqual(len(filtered), 0)
 
     def test_hard_rejection_physics_domain_for_office_query(self) -> None:
-        from query_understanding import understand_query
-        from result_filter import filter_results
-        from search_synthesizer import get_preferred_domains
+        from august.query_understanding import understand_query
+        from august.result_filter import filter_results
+        from august.search_synthesizer import get_preferred_domains
 
         intent = understand_query("who is the current chief minister of west bengal")
         physics_result = Mock(
@@ -1083,8 +1084,8 @@ class OfficeHolderRetrievalTests(unittest.TestCase):
         self.assertEqual(len(filtered), 0)
 
     def test_article_validation_uses_metadata_entities(self) -> None:
-        from query_understanding import understand_query
-        from result_validator import validate_article_content
+        from august.query_understanding import understand_query
+        from august.result_validator import validate_article_content
 
         intent = understand_query("who is the current chief minister of west bengal")
         article = (
@@ -1098,8 +1099,8 @@ class OfficeHolderRetrievalTests(unittest.TestCase):
         self.assertTrue(result["valid"])
 
     def test_article_validation_rejects_unrelated_article(self) -> None:
-        from query_understanding import understand_query
-        from result_validator import validate_article_content
+        from august.query_understanding import understand_query
+        from august.result_validator import validate_article_content
 
         intent = understand_query("who is the current chief minister of west bengal")
         article = (
@@ -1112,8 +1113,8 @@ class OfficeHolderRetrievalTests(unittest.TestCase):
         self.assertFalse(result["valid"])
 
     def test_answer_verification_uses_metadata_entities(self) -> None:
-        from query_understanding import understand_query
-        from result_validator import verify_answer_relevance
+        from august.query_understanding import understand_query
+        from august.result_validator import verify_answer_relevance
 
         intent = understand_query("who is the current chief minister of west bengal")
         article = (

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import re
+
 from fuzzywuzzy import fuzz
 
-from config import config
-
-from utils.logger import get_logger
+from august.config import config
+from august.utils.logger import get_logger
 
 logger = get_logger("Preprocessor")
 

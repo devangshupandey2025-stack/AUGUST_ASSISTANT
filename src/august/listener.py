@@ -3,8 +3,8 @@ from __future__ import annotations
 import speech_recognition as sr
 from fuzzywuzzy import fuzz
 
-from config import config
-from utils.logger import get_logger
+from august.config import config
+from august.utils.logger import get_logger
 
 logger = get_logger("Listener")
 

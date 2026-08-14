@@ -7,11 +7,11 @@ safeguards.
 
 from __future__ import annotations
 
+import base64
 import re
 import time
-import base64
-from datetime import timedelta
 from dataclasses import dataclass
+from datetime import timedelta
 from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
@@ -32,16 +32,24 @@ try:
 except Exception:  # pragma: no cover
     Document = None  # type: ignore[assignment]
 
-from acronym_resolver import expand_acronyms
-from query_understanding import understand_query, QueryIntent
-from query_normalizer import normalize_query
-from search_synthesizer import synthesize_search_query, get_preferred_domains, get_deprioritized_domains
-from result_filter import filter_results
-from retrieval_confidence import assess_retrieval_confidence
-from result_validator import validate_search_result, validate_article_content, verify_answer_relevance
-from consensus import build_consensus
-from providers.provider_router import ProviderRouter
-from utils.logger import get_logger, log_event
+from august.acronym_resolver import expand_acronyms
+from august.consensus import build_consensus
+from august.providers.provider_router import ProviderRouter
+from august.query_normalizer import normalize_query
+from august.query_understanding import understand_query
+from august.result_filter import filter_results
+from august.result_validator import (
+    validate_article_content,
+    validate_search_result,
+    verify_answer_relevance,
+)
+from august.retrieval_confidence import assess_retrieval_confidence
+from august.search_synthesizer import (
+    get_deprioritized_domains,
+    get_preferred_domains,
+    synthesize_search_query,
+)
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("WebResearch")
 

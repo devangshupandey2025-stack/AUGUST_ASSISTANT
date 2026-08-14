@@ -5,16 +5,16 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from config import config
-from answer_memory import AnswerMemory
-from conversation_memory import get_last_topic, remember_answer
-from followup_utils import is_follow_up_query
-from intent_parser import CommandPlan, ParsedCommand, SUPPORTED_ACTIONS
-from answer_fallback import classify_query, try_local_answer
-from garbage_detector import detect_garbage_input
-from personality_engine import personality_engine
-from sanity_validator import validate_query_sanity
-from utils.logger import get_logger, log_event
+from august.answer_fallback import classify_query, try_local_answer
+from august.answer_memory import AnswerMemory
+from august.config import config
+from august.conversation_memory import get_last_topic, remember_answer
+from august.followup_utils import is_follow_up_query
+from august.garbage_detector import detect_garbage_input
+from august.intent_parser import SUPPORTED_ACTIONS, CommandPlan, ParsedCommand
+from august.personality_engine import personality_engine
+from august.sanity_validator import validate_query_sanity
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("DecisionEngine")
 
@@ -1388,7 +1388,7 @@ class DecisionEngine:
             # ==============================================================
             if self._is_weather_query(normalized_query):
                 try:
-                    from weather_service import get_weather
+                    from august.weather_service import get_weather
                     locations = self._extract_locations_from_query(normalized_query)
                     location = locations[0] if locations else "auto-detected"
                     weather = get_weather(location)
@@ -1654,7 +1654,7 @@ class DecisionEngine:
 
     def _extract_locations_from_query(self, normalized: str) -> list[str]:
         """Extract location entities from the query text."""
-        from entity_guard import extract_entities
+        from august.entity_guard import extract_entities
         entities = extract_entities(normalized)
         locations: list[str] = []
         for city in entities.cities:

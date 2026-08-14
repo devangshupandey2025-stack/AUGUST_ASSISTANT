@@ -5,8 +5,8 @@ from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Any
 
-from knowledge_governor import KnowledgeGovernor
-from utils.logger import get_logger, log_event
+from august.knowledge_governor import KnowledgeGovernor
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("AnswerMemory")
 

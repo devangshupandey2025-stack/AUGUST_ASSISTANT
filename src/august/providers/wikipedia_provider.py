@@ -11,10 +11,10 @@ import urllib.parse
 
 import requests
 
-from query_understanding import QueryIntent
-from providers.base_provider import BaseProvider
-from providers.provider_result import ProviderResult
-from utils.logger import get_logger, log_event
+from august.providers.base_provider import BaseProvider
+from august.providers.provider_result import ProviderResult
+from august.query_understanding import QueryIntent
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("WikipediaProvider")
 

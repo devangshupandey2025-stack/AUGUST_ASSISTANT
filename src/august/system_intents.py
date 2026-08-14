@@ -3,9 +3,9 @@ from __future__ import annotations
 import datetime
 import re
 
-from context_engine import IST
-from intent_parser import CommandPlan, ParsedCommand
-from utils.logger import get_logger
+from august.context_engine import IST
+from august.intent_parser import CommandPlan, ParsedCommand
+from august.utils.logger import get_logger
 
 logger = get_logger("SystemIntents")
 

@@ -1,8 +1,9 @@
-import tkinter as tk
+import datetime
 import math
 import random
 import time
-import datetime
+import tkinter as tk
+
 
 class JarvisGUI:
     def __init__(self):
@@ -215,7 +216,7 @@ if __name__ == "__main__":
     def simulate_jarvis():
         states = ["IDLE", "LISTENING", "PROCESSING", "SPEAKING"]
         app.set_state(random.choice(states))
-        app.add_log(f"Simulating voice/action shift.")
+        app.add_log("Simulating voice/action shift.")
         app.root.after(4000, simulate_jarvis)
         
     app.root.after(2000, simulate_jarvis)

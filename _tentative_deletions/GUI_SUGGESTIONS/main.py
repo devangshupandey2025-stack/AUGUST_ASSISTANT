@@ -1,6 +1,8 @@
 import threading
 import time
+
 from gui import JarvisGUI
+
 
 def start_assistant_logic(gui):
     """

@@ -1,12 +1,9 @@
-from core.intent_parser import Intent
-from utils.logger import get_logger
-from core.tts import speak
-from modules import app_control
-from modules import system_controls
-from modules import web_actions
-from modules import file_ops
-from modules.calendar_module import fetch_todays_events, create_calendar_event
-from modules.reminders import reminder_system
+from august.core.intent_parser import Intent
+from august.core.tts import speak
+from august.modules import app_control, file_ops, system_controls, web_actions
+from august.modules.calendar_module import create_calendar_event, fetch_todays_events
+from august.modules.reminders import reminder_system
+from august.utils.logger import get_logger
 
 logger = get_logger("Executor")
 

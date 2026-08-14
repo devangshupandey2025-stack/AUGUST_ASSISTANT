@@ -8,10 +8,9 @@ with richer signal sources when a ``QueryIntent`` is available.
 from __future__ import annotations
 
 import re
-from urllib.parse import urlparse
 
-from query_understanding import QueryIntent
-from utils.logger import get_logger, log_event
+from august.query_understanding import QueryIntent
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("RetrievalConfidence")
 

@@ -8,10 +8,15 @@ from typing import Any
 
 import requests
 
-from config import config
-from conversation_memory import get_faq_answer, get_last_topic, get_preferred_style, normalize_text
-from intent_parser import CommandPlan, ParsedCommand, SUPPORTED_ACTIONS
-from utils.logger import get_logger, log_event
+from august.config import config
+from august.conversation_memory import (
+    get_faq_answer,
+    get_last_topic,
+    get_preferred_style,
+    normalize_text,
+)
+from august.intent_parser import SUPPORTED_ACTIONS, CommandPlan, ParsedCommand
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("AIParser")
 

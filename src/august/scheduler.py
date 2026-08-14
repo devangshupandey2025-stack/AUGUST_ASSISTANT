@@ -4,14 +4,13 @@ import datetime
 import json
 import re
 import threading
-import time
 from pathlib import Path
 from typing import Callable
 
-from config import config
-from context_engine import ContextEngine, IST
-from memory import MemoryStore
-from utils.logger import get_logger
+from august.config import config
+from august.context_engine import IST, ContextEngine
+from august.memory import MemoryStore
+from august.utils.logger import get_logger
 
 logger = get_logger("Scheduler")
 

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from query_understanding import QueryIntent
-from providers.base_provider import BaseProvider
-from providers.provider_result import ProviderResult
-from providers.weather_service import WeatherService
-from providers.utils import extract_location, is_weather_query
-from utils.logger import get_logger, log_event
+from august.providers.base_provider import BaseProvider
+from august.providers.provider_result import ProviderResult
+from august.providers.utils import extract_location, is_weather_query
+from august.providers.weather_service import WeatherService
+from august.query_understanding import QueryIntent
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("WeatherProvider")
 

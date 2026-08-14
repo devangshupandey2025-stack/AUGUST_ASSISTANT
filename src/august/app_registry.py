@@ -7,7 +7,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Iterable
 
-from utils.logger import get_logger, log_event
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("AppRegistry")
 

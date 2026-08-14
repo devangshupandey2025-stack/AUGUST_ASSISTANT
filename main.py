@@ -1,25 +1,21 @@
 from __future__ import annotations
 
-import os, sys
-# Ensure package modules under src/august are importable by legacy bare imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'august'))
-
-from ai_parser import AIParser
-from app_registry import AppRegistry
-from context_engine import ContextEngine
-from decision_engine import DecisionEngine
-from executor import Executor
-from followup_utils import is_follow_up_query
-from garbage_detector import detect_garbage_input
-from intent_parser import CommandPlan, IntentParser
-from listener import Listener
-from memory import MemoryStore
-from modules.calendar_module import fetch_todays_events
-from preprocessor import Preprocessor
-from scheduler import AssistantScheduler
-from system_intents import SystemIntentResolver
-from tts import speak
-from utils.logger import get_logger, log_event
+from august.ai_parser import AIParser
+from august.app_registry import AppRegistry
+from august.context_engine import ContextEngine
+from august.decision_engine import DecisionEngine
+from august.executor import Executor
+from august.followup_utils import is_follow_up_query
+from august.garbage_detector import detect_garbage_input
+from august.intent_parser import CommandPlan, IntentParser
+from august.listener import Listener
+from august.memory import MemoryStore
+from august.modules.calendar_module import fetch_todays_events
+from august.preprocessor import Preprocessor
+from august.scheduler import AssistantScheduler
+from august.system_intents import SystemIntentResolver
+from august.tts import speak
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("Main")
 
@@ -237,8 +233,9 @@ class VoiceAssistant:
 
 if __name__ == "__main__":
     import sys
-    from gui import JarvisGUI
-    import tts
+
+    import august.tts as tts
+    from august.gui import JarvisGUI
 
     assistant = VoiceAssistant()
 

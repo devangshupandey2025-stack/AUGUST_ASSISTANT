@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 
 from fuzzywuzzy import fuzz
 
-from utils.logger import get_logger, log_event
+from august.utils.logger import get_logger, log_event
 
 logger = get_logger("QueryUnderstanding")
 

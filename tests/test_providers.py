@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import unittest
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock, patch
 
 import requests
 
-from query_understanding import QueryIntent
-from providers.provider_result import ProviderResult
-from providers.base_provider import BaseProvider
-from providers.wikipedia_provider import WikipediaProvider
-from providers.provider_router import ProviderRouter
+from august.providers.base_provider import BaseProvider
+from august.providers.provider_result import ProviderResult
+from august.providers.provider_router import ProviderRouter
+from august.providers.wikipedia_provider import WikipediaProvider
+from august.query_understanding import QueryIntent
 
 
 def _make_intent(
@@ -294,7 +294,7 @@ class WikipediaProviderFetchTests(unittest.TestCase):
     def setUp(self) -> None:
         self.provider = WikipediaProvider()
 
-    @patch("providers.wikipedia_provider.requests.get")
+    @patch("august.providers.wikipedia_provider.requests.get")
     def test_fetch_definition_success(self, mock_get: MagicMock) -> None:
         intent = _make_intent(
             query_type="definition",
@@ -339,7 +339,7 @@ class WikipediaProviderFetchTests(unittest.TestCase):
         self.assertEqual(result.url, "https://en.wikipedia.org/wiki/Polymorphism")
         self.assertGreater(result.confidence, 0.5)
 
-    @patch("providers.wikipedia_provider.requests.get")
+    @patch("august.providers.wikipedia_provider.requests.get")
     def test_fetch_page_not_found(self, mock_get: MagicMock) -> None:
         intent = _make_intent(
             query_type="definition",
@@ -358,7 +358,7 @@ class WikipediaProviderFetchTests(unittest.TestCase):
 
         self.assertFalse(result.success)
 
-    @patch("providers.wikipedia_provider.requests.get")
+    @patch("august.providers.wikipedia_provider.requests.get")
     def test_fetch_summary_404(self, mock_get: MagicMock) -> None:
         intent = _make_intent(
             query_type="definition",
@@ -381,7 +381,7 @@ class WikipediaProviderFetchTests(unittest.TestCase):
 
         self.assertFalse(result.success)
 
-    @patch("providers.wikipedia_provider.requests.get")
+    @patch("august.providers.wikipedia_provider.requests.get")
     def test_fetch_api_error(self, mock_get: MagicMock) -> None:
         intent = _make_intent(
             query_type="definition",
@@ -591,7 +591,7 @@ class WebResearchProviderIntegrationTests(unittest.TestCase):
     def test_provider_skips_weather_query_before_web_search(self) -> None:
         """Verify that weather queries skip the provider and fall through
         to web research (which is tested by the existing test suite)."""
-        from web_research import WebResearchEngine
+        from august.web_research import WebResearchEngine
 
         engine = WebResearchEngine()
         intent = _make_intent(
@@ -606,7 +606,6 @@ class WebResearchProviderIntegrationTests(unittest.TestCase):
 
     def test_office_holder_skips_provider(self) -> None:
         """Office-holder queries should not be handled by Wikipedia."""
-        from web_research import WebResearchEngine
 
         intent = _make_intent(
             query_type="dynamic_fact",
@@ -618,11 +617,11 @@ class WebResearchProviderIntegrationTests(unittest.TestCase):
         result = provider_router.route(intent)
         self.assertIsNone(result)
 
-    @patch("providers.wikipedia_provider.requests.get")
+    @patch("august.providers.wikipedia_provider.requests.get")
     def test_wikipedia_fetch_works_and_validates(self, mock_get: MagicMock) -> None:
         """Test the full provider flow: fetch → validate → return."""
-        from web_research import WebResearchEngine
-        from result_validator import validate_article_content, verify_answer_relevance
+        from august.result_validator import validate_article_content, verify_answer_relevance
+        from august.web_research import WebResearchEngine
 
         engine = WebResearchEngine()
 
@@ -677,13 +676,13 @@ class WebResearchProviderIntegrationTests(unittest.TestCase):
         verification = verify_answer_relevance(result.raw_text, "what is polymorphism", intent)
         self.assertTrue(verification["valid"], f"Answer verification failed: {verification.get('reason')}")
 
-    @patch("web_research.ProviderRouter")
-    @patch("web_research.WebResearchEngine._search")
+    @patch("august.web_research.ProviderRouter")
+    @patch("august.web_research.WebResearchEngine._search")
     def test_web_research_falls_through_when_provider_none(
         self, mock_search: MagicMock, mock_router_class: MagicMock
     ) -> None:
         """When provider returns None, web research should proceed normally."""
-        from web_research import WebResearchEngine
+        from august.web_research import WebResearchEngine
 
         mock_router = Mock()
         mock_router.route.return_value = None

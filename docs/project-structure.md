@@ -4,15 +4,15 @@
 JARVIS/
 ├─ .gitignore
 ├─ README.md
-├─ app_registry_cache.json
 ├─ main.py
 ├─ requirements.txt
 ├─ updates.md
 ├─ docs/
 │  └─ issues.md
-├─ GUI_SUGGESTIONS/
-│  ├─ gui.py
-│  └─ main.py
+├─ _tentative_deletions/
+│  └─ GUI_SUGGESTIONS/
+│     ├─ gui.py
+│     └─ main.py
 ├─ src/
 │  └─ august/
 │     ├─ __init__.py
@@ -87,10 +87,6 @@ JARVIS/
 │  ├─ test_retrieval_intelligence.py
 │  ├─ test_weather_provider.py
 │  └─ test_web_research_stability.py
-├─ TEST_OUTPUTS/
-│  ├─ D_Link_Net.docx
-│  ├─ Fc_And_8_Segnet_Unit_D_Link_Net.docx
-│  └─ Rbc.docx
 └─ vosk-model-small-en-us-0.15/
    ├─ README
    ├─ am/
@@ -112,3 +108,5 @@ JARVIS/
       ├─ online_cmvn.conf
       └─ splice.conf
 ```
+
+`app_registry_cache.json` and `TEST_OUTPUTS/` are generated runtime/test artifacts and are intentionally excluded from source tracking.

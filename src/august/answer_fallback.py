@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from conversation_memory import normalize_text
+from august.conversation_memory import normalize_text
 
 LOCAL_CONFIDENCE_THRESHOLD = 0.7
 TEMPLATES = [
