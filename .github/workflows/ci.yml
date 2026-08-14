@@ -33,7 +33,7 @@ jobs:
 
       - name: Install development tools
         run: |
-          python -m pip install ruff mypy pytest
+            python -m pip install ruff mypy pytest types-requests types-python-dateutil
 
       - name: Ruff
         run: ruff check .
